@@ -13,6 +13,11 @@ Postgres ahead of demand; the `web` app only ever reads a `ready` row and
 serves it instantly. This is what makes the app fast — not a shorter
 feedback format.
 
+**Full architecture, data model, and the phased build plan live in
+[PLAN.md](PLAN.md).** Starting a fresh session to build the next phase?
+Just say: *"Clone this repo, read PLAN.md and README.md, then build
+Phase N."*
+
 ## Architecture
 
 Two Heroku process types sharing one Postgres database:
