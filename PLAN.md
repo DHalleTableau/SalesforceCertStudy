@@ -10,6 +10,16 @@
 > updated as decisions change; see README.md's Status checklist for
 > which phases are done.
 
+## Local Environment Notes (read before touching git or pip)
+
+Rediscovering these burns real context every session — don't. Both were hit and worked around while building Phase 1:
+
+- **Working checkout location:** writes to any directory literally named `.git` fail with `Operation not permitted` under `~/Documents/Claude` (a local sandbox restriction, not a real permissions problem on this Mac). `git clone`/`git init` there will fail. **Clone into `$TMPDIR` instead** (e.g. `cd "$TMPDIR" && git clone https://github.com/DHalleTableau/SalesforceCertStudy.git`) and do all work from there.
+- **No PyPI access in the assistant's sandbox:** `pip install` fails with a proxy 403 — it cannot reach PyPI. This means the assistant **cannot** create a venv and run `pip install -r requirements.txt` to verify Flask/SQLAlchemy code actually runs. For:
+  - **Pure-Python sub-steps that only use the standard library** (e.g. `parse_exam_guides_csv`, `parse_prerequisites_csv` — just the `csv` module) — verify with plain `python3` directly, no venv/pip needed at all. This covers most of the small sub-steps.
+  - **Anything needing Flask/SQLAlchemy/psycopg2/anthropic** — the assistant can only static-check (`python3 -m py_compile`), not actually run it. Say so plainly rather than claiming it works; ask the user to run the real boot/verify command in their own terminal (where `pip install` works fine).
+- **`git push` requires the user's own terminal.** The assistant has no GitHub push credentials in its sandboxed environment (`gh auth status` shows the keyring token isn't visible to it even after the user runs `gh auth login`). The assistant commits locally; the user runs `git push origin main` themselves. **Always confirm a push actually landed** (`git fetch origin && git log --oneline origin/main -3`) before assuming a fresh session will see the latest commit — don't just assume the push happened.
+
 ## Context
 
 The user (a Salesforce Analytics SE, non-developer) is preparing over ~3 weeks for two certifications: **Agentforce Certified Specialist (AI-201)** and **Data 360 Certified Consultant (Data-Con-101)**. They have been practicing via chat, but the **latency between answering a question and receiving the next one + full feedback (~5–15s of model time in the request path) is the core problem**.
