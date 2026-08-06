@@ -41,8 +41,9 @@ every step:
       support), a Flask app that boots and creates tables, `worker.py`
       stub, `requirements.txt`, `runtime.txt`, `Procfile`,
       `.env.example`, `.gitignore`.
-- [ ] Phase 2 — Resource ingestion (2-tab Google Sheet, published-CSV
-      fetch, → `resources`/`cert_prerequisites`, two-tier fetch/paste).
+- [ ] Phase 2 — Resource ingestion (2-tab Google Sheet, pasted CSV/TSV
+      text → `resources`/`cert_prerequisites`, two-tier fetch/paste for
+      individual Exam Guide pages).
 - [ ] Phase 3 — Worker + question generation (`claude_client.py`, cert
       overview derivation, on-demand top-up loop).
 - [ ] Phase 4 — Question UI + review/export.
