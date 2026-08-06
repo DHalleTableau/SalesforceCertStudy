@@ -28,10 +28,12 @@ def utcnow():
 class Resource(db.Model):
     """A single link the user tagged as primary or additional for a cert.
 
-    Populated by ingest.py (Phase 2) from the user's Google Doc.
-    `pasted_text`/`fetched_text` hold grounding content: `fetched_text` is
-    filled by Tier-1 auto-fetch for plain URLs; `pasted_text` is filled by
-    the user for Tier-2 gated/JS-rendered pages the app can't fetch.
+    Populated by ingest.py (Phase 2) from the "Exam Guides" tab of the
+    user's Google Sheet: one row per link, `role` = "primary" for rows
+    marked Base, "additional" for rows marked Extra. `pasted_text`/
+    `fetched_text` hold grounding content: `fetched_text` is filled by
+    Tier-1 auto-fetch for plain URLs; `pasted_text` is filled by the user
+    for Tier-2 gated/JS-rendered pages the app can't fetch.
     """
 
     __tablename__ = "resources"
@@ -56,21 +58,63 @@ class Cert(db.Model):
     Derived by worker.py (Phase 3) from the cert's primary Exam Guide
     resource(s) the first time a session for that cert starts, then
     cached here so it isn't re-derived every session.
+
+    `is_aggregate` mirrors the "Aggregate Certification" column: an
+    aggregate cert has no exam of its own and is earned automatically
+    once its prerequisites (see CertPrerequisite) are met, so question
+    generation for it draws entirely from those prerequisites rather
+    than from this cert's own (nonexistent) exam guide.
     """
 
     __tablename__ = "certs"
 
     cert_code = db.Column(db.String, primary_key=True)
     name = db.Column(db.String, nullable=False)
+    detail_page_url = db.Column(db.String, nullable=True)
     exam_guide_url = db.Column(db.String, nullable=True)
+    is_aggregate = db.Column(db.Boolean, nullable=False, default=False)
     duration_min = db.Column(db.Integer, nullable=True)
     num_questions = db.Column(db.Integer, nullable=True)
     passing_score = db.Column(db.Integer, nullable=True)  # percent
     domains_json = db.Column(db.JSON, nullable=True)  # [{name, weight_pct}]
     derived_at = db.Column(db.DateTime(timezone=True), nullable=True)
 
+    prerequisites = db.relationship(
+        "CertPrerequisite",
+        foreign_keys="CertPrerequisite.cert_code",
+        backref="cert",
+        lazy="dynamic",
+    )
+
     def __repr__(self):
-        return f"<Cert {self.cert_code}>"
+        return f"<Cert {self.cert_code} aggregate={self.is_aggregate}>"
+
+
+class CertPrerequisite(db.Model):
+    """One direct edge: `cert_code` requires `prereq_cert_code` first.
+
+    Mirrors the "Certification Prerequisites" sheet tab (PreReq 1-4
+    columns become one row each). Chains are resolved by walking this
+    table recursively in application code (Phase 4 session setup) since
+    a prerequisite can itself have further prerequisites and/or be
+    flagged aggregate on `Cert.is_aggregate` — there is no flattened
+    closure stored here, only direct edges.
+    """
+
+    __tablename__ = "cert_prerequisites"
+
+    id = db.Column(db.String, primary_key=True, default=_uuid)
+    cert_code = db.Column(
+        db.String, db.ForeignKey("certs.cert_code"), nullable=False, index=True
+    )
+    prereq_cert_code = db.Column(
+        db.String, db.ForeignKey("certs.cert_code"), nullable=False
+    )
+
+    prereq_cert = db.relationship("Cert", foreign_keys=[prereq_cert_code])
+
+    def __repr__(self):
+        return f"<CertPrerequisite {self.cert_code} <- {self.prereq_cert_code}>"
 
 
 class StudySession(db.Model):

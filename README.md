@@ -36,12 +36,13 @@ Built in phases, each committed independently so the app is runnable at
 every step:
 
 - [x] **Phase 1 — Skeleton + data model.** `models.py` (SQLAlchemy
-      tables for resources/certs/sessions/question_queue/answers), a
-      Flask app that boots and creates tables, `worker.py` stub,
-      `requirements.txt`, `runtime.txt`, `Procfile`, `.env.example`,
-      `.gitignore`.
-- [ ] Phase 2 — Resource ingestion (Google Doc → `resources`, two-tier
-      fetch/paste).
+      tables for resources/certs/cert_prerequisites/sessions/
+      question_queue/answers, including aggregate-cert and prerequisite
+      support), a Flask app that boots and creates tables, `worker.py`
+      stub, `requirements.txt`, `runtime.txt`, `Procfile`,
+      `.env.example`, `.gitignore`.
+- [ ] Phase 2 — Resource ingestion (2-tab Google Sheet, published-CSV
+      fetch, → `resources`/`cert_prerequisites`, two-tier fetch/paste).
 - [ ] Phase 3 — Worker + question generation (`claude_client.py`, cert
       overview derivation, on-demand top-up loop).
 - [ ] Phase 4 — Question UI + review/export.
