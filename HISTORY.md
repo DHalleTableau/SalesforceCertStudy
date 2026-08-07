@@ -265,3 +265,25 @@ programmatic access to this gateway (as opposed to a developer's
 laptop over VPN) -- same category of "undocumented internal setup" as
 the original gateway credentials (see "The internal Claude gateway"
 section above), likely already solved by someone else in the org.
+
+**Answer from asking in the internal Claude Code support channel:**
+confirmed there is genuinely no documented supported path for a
+server-side/cloud-hosted process (Heroku dyno or otherwise) to reach
+`eng-ai-model-gateway.sfproxy.devx-preprod.aws-esvc1-useast2.aws.sfdc.cl`
+directly -- the only supported setup is a developer machine on VPN
+(DevBar/installer). No IP allowlist process, no PrivateLink/VPC peering
+option, no proxy tier for cloud apps. This is an actual infrastructure
+gap, not something fixable from the app side. Escalated further to
+`#community-claude-code` with the outbound IPs + `ConnectTimeout` error
+for the DevX/infra team; response pending as of this writing.
+
+**Interim workaround while waiting on that escalation:** run
+`worker.py` locally (on the VPN-connected Mac, where the gateway is
+already reachable) pointed at the deployed Heroku Postgres via
+`DATABASE_URL`, while `web` stays deployed and serves real traffic
+normally on Heroku. The two processes only share a database, not a
+network -- `worker` never needed to be co-located with `web`, it just
+needs DB access + gateway access from wherever it runs. Not yet
+verified whether the space-attached Postgres is reachable from outside
+Heroku's network at all -- untested as of this writing, same class of
+Private-Space-network-isolation risk as everything else in this phase.
