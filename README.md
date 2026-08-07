@@ -14,9 +14,17 @@ serves it instantly. This is what makes the app fast — not a shorter
 feedback format.
 
 **Full architecture, data model, and the phased build plan live in
-[PLAN.md](PLAN.md).** Starting a fresh session to build the next phase?
-Just say: *"Clone this repo, read PLAN.md and README.md, then build
-Phase N."*
+[PLAN.md](PLAN.md)** (kept short and dense on purpose — see
+[HISTORY.md](HISTORY.md) for the detailed narrative behind non-obvious
+decisions, only needed for "why", not for doing the next task).
+
+**Starting a fresh session to build the next phase? Use PLAN.md's
+"Phased Implementation" section's exact copy-paste resume block —
+verbatim, do not paraphrase it as "clone the repo, read the docs."**
+Pasting a paraphrase instead of the literal command has repeatedly
+caused fresh sessions to clone into the wrong directory, hit a sandbox
+write restriction, and burn their entire context thrashing through
+workarounds before ever reading a line of PLAN.md.
 
 ## Architecture
 
