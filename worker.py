@@ -170,6 +170,7 @@ def top_up_session(session):
             )
             db.session.commit()
             ready_count += 1
+            print(f"  generated {cert_code} [{format}] ready={ready_count}/{READY_THRESHOLD}")
 
 
 def main():
