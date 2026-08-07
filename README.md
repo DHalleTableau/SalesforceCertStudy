@@ -54,12 +54,15 @@ every step:
       succeeds for this sheet's real Exam_Guide_URLs (they're
       JS-rendered Experience Cloud pages) — expect to use the
       per-resource paste box for any cert you actually want grounded.
-- [x] **Phase 3 (in progress) — Worker + question generation.**
+- [x] **Phase 3 — Worker + question generation.**
       `claude_client.py` (question generation + cert-overview
       derivation, both verified against the real internal gateway),
       `worker.py`'s on-demand top-up loop (verified: fills a session's
-      queue to 5 ready rows with long-form feedback intact). See
-      PLAN.md for the internal-gateway credential/protocol details.
+      queue to 5 ready rows with long-form feedback intact). Hardened
+      against real gateway/model flakiness on structured output (flat
+      arrays instead of nested objects, schema-level count constraints,
+      validation + retry). See PLAN.md for the internal-gateway
+      credential/protocol details and the flakiness mitigations.
 - [ ] Phase 4 — Question UI + review/export.
 - [ ] Phase 5 — Heroku deploy.
 
