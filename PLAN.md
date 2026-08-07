@@ -88,8 +88,9 @@ Target repo: **https://github.com/DHalleTableau/SalesforceCertStudy**.
   eventually any Salesforce employee (org-wide) — this was the
   original intent, not scope creep; no data-model change needed for
   multi-user since everything already keys off `session_id`. Hosting
-  is fixed at Heroku Enterprise (`dashboard.heroku.com/enterprise/
-  sfdc-sales-org`), not a personal account, and not changing.
+  is fixed at Heroku Enterprise, team **`se-smb`**
+  (`dashboard.heroku.com/teams/se-smb`), not a personal account, and
+  not changing.
 - **Claude access is internal-gateway-only — resolved.** The gateway
   is a unified multi-provider proxy speaking the **OpenAI Chat
   Completions API** for every model (confirmed via `GET
