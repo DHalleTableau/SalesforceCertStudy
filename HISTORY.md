@@ -287,3 +287,54 @@ needs DB access + gateway access from wherever it runs. Not yet
 verified whether the space-attached Postgres is reachable from outside
 Heroku's network at all -- untested as of this writing, same class of
 Private-Space-network-isolation risk as everything else in this phase.
+
+## Phase 5 outcome so far: deployed, two blockers, one working interim path
+
+End-to-end verified working (real production data, real generated
+questions, real grading/feedback): ingestion, session setup,
+overview, the full question loop (single + multi select), all running
+via `app.py` + `worker.py` **locally**, both pointed at the deployed
+Heroku Postgres (`DATABASE_URL` from `heroku config:get -a
+sf-cert-study`). This is not a toy test -- it's the real app working
+against real data, just with the two processes running on a laptop
+instead of Heroku dynos.
+
+Two separate blockers remain on actually using the Heroku-hosted
+`web`/`worker` themselves, both requiring someone outside this app:
+1. **Trusted IP Ranges** (`se-smb-internal` space) blocks the app's own
+   public URL from any IP not already allowlisted; adding an IP needs
+   a `se-smb` team admin (role `member` can't self-service this).
+2. **Gateway network access** -- confirmed no supported path exists
+   yet for a Heroku dyno to reach the internal Claude gateway; escalated
+   to `#community-claude-code`. See the earlier "Phase 5: worker cannot
+   reach gateway" section above for the full diagnostic chain.
+
+Bugs found and fixed along the way (all real, not environment quirks):
+- `save_prerequisites` crashed on any prerequisite edge referencing a
+  cert missing from Exam Guides -- SQLite silently allowed this
+  dangling reference in earlier local testing; Postgres correctly
+  rejected it. Fixed to skip + report instead of crashing (see the
+  earlier "Fix crash on prereq edges" entry).
+- `session_overview.html` had stale placeholder text instead of a
+  link to the actual question loop (4e was built after this template
+  was written, and the template was never updated).
+- A genuinely blank Exam Guides paste (missing "Certification" column
+  entirely -- the pasted sheet used "Title" instead) silently parsed
+  to zero rows with no error, which cascaded into a long, confusing
+  chain of symptoms (a seemingly-empty production database, seemingly
+  lost data) that were actually all downstream of that one empty
+  parse. Diagnosed by adding temporary debug prints directly in the
+  request handler to see `Cert.query.count()` immediately after the
+  save, which caught it going into the wall.
+- `worker.py` never printed anything on a *successful* generation,
+  only on rejected retries -- made a fully-succeeded queue (5/5 ready)
+  look permanently stuck, since the terminal only ever showed old
+  failure messages scrolling by with nothing after them. Fixed by
+  logging on success too.
+
+Also found: multiple abandoned `StudySession` rows (empty
+`cert_codes`, from early testing before the checkbox-not-checked issue
+was caught) still show up as `status="active"` forever -- nothing in
+this app ever marks a session `ended`. Harmless so far (worker.py
+just loops over them doing nothing since `cert_codes` is empty), but
+worth cleaning up or adding session-ending logic eventually.

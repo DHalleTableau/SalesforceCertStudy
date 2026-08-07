@@ -245,9 +245,27 @@ Then resume from the Current progress note below.
 ```
 
 **Current progress (update every time a sub-step finishes or is left
-mid-way):** Phase 4 **complete (4a-4g all done)**. Next: **Phase 5 —
-Deploy**. First check before anything else in that phase: confirm the
-deployed `worker` dyno can reach the internal Claude gateway.
+mid-way):** Phase 4 **complete**. Phase 5 **partially blocked, but the
+app is actually usable right now via a workaround.** Deployed to
+Heroku (`sf-cert-study`, team `se-smb`, space `se-smb-internal`) with
+Postgres attached -- app.py and worker.py both run correctly against
+it. Two separate, still-open blockers, both needing someone outside
+this app to act:
+- **Web access:** the deployed app's public URL 403s until an admin
+  adds your VPN IP to the space's Trusted IP Ranges (you don't have
+  the role to do this yourself). Ask a `se-smb` team admin.
+- **Gateway access:** the Heroku `worker` dyno cannot reach the
+  internal Claude gateway at all (`ConnectTimeout` -- confirmed no
+  supported path exists yet, escalated to #community-claude-code).
+**Interim workaround (verified working end-to-end):** run `app.py` AND
+`worker.py` locally, both pointed at the deployed Heroku Postgres via
+`DATABASE_URL` (reachable from your Mac over VPN even though the app's
+HTTP routing isn't) -- full question loop confirmed working against
+real production data and real generated questions. See HISTORY.md's
+Phase 5 section for the full blocker list and the exact commands.
+Next: 4g's CSV export is untested against production data; otherwise
+wait on the two escalations above before revisiting a fully-hosted
+deploy.
 
 1. **Skeleton + data model.** **[Done]**
 2. **Ingestion** (`ingest.py`, admin screen). **[Done: 2a-2g]** —
