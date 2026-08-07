@@ -36,7 +36,18 @@
   any reboot).
 - **`.env`** (gitignored) with `FLASK_SECRET_KEY`,
   `APP_LOGIN_USERNAME`/`APP_LOGIN_PASSWORD`, `DATABASE_URL=` (blank,
-  sqlite fallback) — `app.py` loads it via `python-dotenv`.
+  sqlite fallback) — `app.py` loads it via `python-dotenv`. **Check for
+  it with `test -f .env`, never `ls`/`find`** — the exact command is
+  below; use it literally, do not improvise a check:
+  ```bash
+  cd "$TMPDIR/SalesforceCertStudy"
+  test -f .env || cat > .env <<'EOF'
+  FLASK_SECRET_KEY=dev-local-secret
+  APP_LOGIN_USERNAME=admin
+  APP_LOGIN_PASSWORD=changeme
+  DATABASE_URL=
+  EOF
+  ```
 - **`git push` needs the user's own terminal** — the assistant commits
   locally, the user pushes. **Verify every push landed** with `git
   ls-remote <repo-url> HEAD` (cache-proof) immediately after, before
@@ -213,7 +224,12 @@ package files -- one such command will dump a massive listing into
 context and can single-handedly cause repeated autocompact thrashing.
 Only read specific, named files with their full absolute path.
 
-Then set up the venv per Local Environment Notes' exact pip install line (not -r requirements.txt) and create a .env per that same section.
+Then set up the venv per Local Environment Notes' exact pip install line
+(not -r requirements.txt).
+
+Then run the .env command from Local Environment Notes' `.env` bullet
+literally -- do NOT check for it with ls/find, only `test -f .env`. That
+bullet has the exact command; use it verbatim, do not improvise a check.
 
 Then resume from the Current progress note below.
 ```

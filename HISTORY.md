@@ -138,6 +138,31 @@ Environment Notes, not just the resume block, since the "no recursive
 listing" rule matters any time work happens in this checkout, not only
 at session start.
 
+### Round two: same pattern, one step later (checking for `.env`)
+
+The absolute-path fix above worked — a subsequent fresh-session attempt
+cleanly cloned, read `PLAN.md`/`README.md` via the absolute path, and
+set up the venv without incident. It then thrashed at the very next
+step: "Checked if .env already exists." Same failure signature as
+before (autocompact thrashing right after an exploratory step), one
+bullet later in the resume flow.
+
+Cause: the `.env` bullet in Local Environment Notes said "create a
+`.env`" but gave no literal check-for-existence command — the exact
+same vague-paraphrase gap that caused the clone-location failures,
+just recurring at a different step. The fresh session improvised its
+own check, almost certainly something unscoped (`ls`, `find`) that,
+run from the repo root, swept `.venv`'s 5000+ files again.
+
+Fixed the same way as the clone step: gave the `.env` bullet a literal
+`test -f .env || cat > .env <<'EOF' ... EOF` command and told the
+resume prompt to use it verbatim, never to improvise a check with
+`ls`/`find`. General lesson (worth checking for elsewhere in
+`PLAN.md`): **any instruction telling a fresh session to "check for" or
+"create" something needs the literal command inline, not prose** — prose
+here has twice now caused the session to invent its own recovery step
+that swept `.venv`.
+
 ## Other resolved quirks
 
 - **Writes to any directory literally named `.git` fail** under the
