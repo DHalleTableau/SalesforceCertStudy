@@ -22,6 +22,8 @@
     <a href="{{ url_for('session_review', session_id=session.id, filter='wrong') }}" class="{{ 'active' if filter_value == 'wrong' }}">Wrong</a>
   </p>
 
+  <p><a href="{{ url_for('session_export_csv', session_id=session.id, filter=filter_value) }}">Download CSV ({{ filter_value }})</a></p>
+
   <table>
     <tr>
       <th>Question</th>

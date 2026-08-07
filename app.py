@@ -5,6 +5,8 @@ generation lives in worker.py (Phase 3). Login, session setup, the
 question loop, and review/export routes are added in later phases; see
 PLAN.md for the full architecture and phase breakdown.
 """
+import csv
+import io
 import json
 import os
 
@@ -12,7 +14,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from flask import Flask, jsonify, redirect, render_template, request, url_for
+from flask import Flask, Response, jsonify, redirect, render_template, request, url_for
 
 from auth import login_required, register_auth_routes
 from cert_resolution import resolve_certs
@@ -189,6 +191,38 @@ def create_app():
             session=study_session,
             answers=answers,
             filter_value=filter_value,
+        )
+
+    @app.route("/session/<session_id>/export.csv")
+    @login_required
+    def session_export_csv(session_id):
+        StudySession.query.get_or_404(session_id)
+        filter_value = request.args.get("filter", "both")
+        answers = _get_review_answers(session_id, filter_value)
+
+        buffer = io.StringIO()
+        writer = csv.writer(buffer)
+        writer.writerow(
+            ["Question", "Your Answer", "Correct Answer", "Domain", "Correct?", "Answered At"]
+        )
+        for answer in answers:
+            writer.writerow(
+                [
+                    answer.question.stem,
+                    ", ".join(answer.user_answer_json),
+                    ", ".join(answer.question.correct_json),
+                    answer.question.domain or "",
+                    "Yes" if answer.is_correct else "No",
+                    answer.answered_at,
+                ]
+            )
+
+        return Response(
+            buffer.getvalue(),
+            mimetype="text/csv",
+            headers={
+                "Content-Disposition": f'attachment; filename="review_{session_id}_{filter_value}.csv"'
+            },
         )
 
     return app

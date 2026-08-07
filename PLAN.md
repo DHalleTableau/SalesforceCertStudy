@@ -235,11 +235,9 @@ Then resume from the Current progress note below.
 ```
 
 **Current progress (update every time a sub-step finishes or is left
-mid-way):** Phase 4, sub-step **4f done**. Next: **4g** — CSV export,
-same query as 4f's `_get_review_answers()`, formatted as a downloadable
-CSV (question, user answer, correct answer, domain, correct?,
-timestamp). Verify: downloaded file's right/wrong/both counts match
-the review screen's filter.
+mid-way):** Phase 4 **complete (4a-4g all done)**. Next: **Phase 5 —
+Deploy**. First check before anything else in that phase: confirm the
+deployed `worker` dyno can reach the internal Claude gateway.
 
 1. **Skeleton + data model.** **[Done]**
 2. **Ingestion** (`ingest.py`, admin screen). **[Done: 2a-2g]** —
@@ -258,7 +256,7 @@ the review screen's filter.
    - 4e. Question loop (`/session/<id>/question`,
      `/session/<id>/answer`). **[Done]**
    - 4f. Review screen (`/session/<id>/review?filter=...`). **[Done]**
-   - 4g. CSV export — see "Current progress" above.
+   - 4g. CSV export (`/session/<id>/export.csv`). **[Done]**
 5. **Deploy.** **First check, before anything else in this phase:**
    confirm the deployed `worker` dyno can actually reach the internal
    Claude gateway (e.g. a one-off `heroku run` hitting it) — unverified
