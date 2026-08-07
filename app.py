@@ -64,9 +64,6 @@ def create_app():
 
             fetch_counts = fetch_pending_resources()
 
-            print(f"DEBUG engine url: {db.engine.url}")
-            print(f"DEBUG Cert.query.count() right now: {Cert.query.count()}")
-
             summary = {
                 "exam_guide_rows": len(exam_guide_rows),
                 "certs_touched": len(certs_touched),
