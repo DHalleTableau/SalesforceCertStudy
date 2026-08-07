@@ -1,0 +1,45 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Session Overview</title>
+  <style>
+    body { font-family: sans-serif; max-width: 700px; margin: 2rem auto; }
+    .cert { border: 1px solid #ddd; border-radius: 4px; padding: 1rem; margin-bottom: 1rem; }
+    .pending { color: #888; font-style: italic; }
+    table { width: 100%; border-collapse: collapse; }
+    td { padding: 0.2rem 0.5rem; }
+  </style>
+</head>
+<body>
+  <h1>Session Overview</h1>
+  <p>Session ID: {{ session.id }}</p>
+
+  {% for cert in certs %}
+  <div class="cert">
+    <h2>{{ cert.name }}{% if cert.is_aggregate %} (aggregate){% endif %}</h2>
+    {% if cert.duration_min is none %}
+    <p class="pending">
+      Overview still being derived by the worker -- refresh in a
+      moment. (No overview is derived for a cert with no grounding
+      content pasted yet.)
+    </p>
+    {% else %}
+    <table>
+      <tr><td>Duration</td><td>{{ cert.duration_min }} minutes</td></tr>
+      <tr><td>Questions</td><td>{{ cert.num_questions }}</td></tr>
+      <tr><td>Passing score</td><td>{{ cert.passing_score }}%</td></tr>
+    </table>
+    <h3>Domain breakdown</h3>
+    <ul>
+      {% for domain in cert.domains_json %}
+      <li>{{ domain.name }}: {{ domain.weight_pct }}%</li>
+      {% endfor %}
+    </ul>
+    {% endif %}
+  </div>
+  {% endfor %}
+
+  <p>The question loop is added in the next sub-step.</p>
+</body>
+</html>

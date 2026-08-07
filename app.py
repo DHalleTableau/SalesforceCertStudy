@@ -121,7 +121,19 @@ def create_app():
         db.session.add(study_session)
         db.session.commit()
 
-        return render_template("session_created.html", session=study_session)
+        return redirect(url_for("session_overview", session_id=study_session.id))
+
+    @app.route("/session/<session_id>/overview")
+    @login_required
+    def session_overview(session_id):
+        study_session = StudySession.query.get_or_404(session_id)
+        certs = [
+            Cert.query.get(cert_code) for cert_code in study_session.cert_codes
+        ]
+        certs = [c for c in certs if c is not None]
+        return render_template(
+            "session_overview.html", session=study_session, certs=certs
+        )
 
     return app
 
