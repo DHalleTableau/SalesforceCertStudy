@@ -68,6 +68,43 @@ def _next_format(ready_count):
     return "multi" if ready_count % 3 == 2 else "single"
 
 
+MAX_GENERATION_ATTEMPTS = 5
+
+
+MIN_FEEDBACK_LENGTH = 100
+
+
+def _is_valid_question(question, format):
+    """The model doesn't always respect exact option-count constraints
+    perfectly, or occasionally leaks tool-call formatting artifacts
+    that get stripped down to almost nothing (see
+    claude_client._strip_tool_call_artifacts) -- validate before
+    inserting into the queue rather than trusting it blindly.
+
+    Returns (True, "") or (False, "<reason>") so callers can log why a
+    candidate was rejected instead of just a bare pass/fail.
+    """
+    expected_options = 4 if format == "single" else 5
+    actual_options = len(question.get("options", []))
+    if actual_options != expected_options:
+        return False, f"expected {expected_options} options, got {actual_options}"
+
+    min_correct, max_correct = (1, 1) if format == "single" else (2, 3)
+    correct = question.get("correct", [])
+    if not (min_correct <= len(correct) <= max_correct):
+        return False, f"expected {min_correct}-{max_correct} correct, got {len(correct)}"
+
+    option_keys = {o.get("key") for o in question.get("options", [])}
+    if not set(correct).issubset(option_keys):
+        return False, f"correct keys {correct} not a subset of option keys {option_keys}"
+
+    feedback_len = len(question.get("feedback_md", ""))
+    if feedback_len < MIN_FEEDBACK_LENGTH:
+        return False, f"feedback_md too short after cleanup: {feedback_len} chars"
+
+    return True, ""
+
+
 def top_up_session(session):
     """Fill each of session's certs' queues up to READY_THRESHOLD."""
     for cert_code in session.cert_codes:
@@ -88,14 +125,34 @@ def top_up_session(session):
 
             difficulty = _next_difficulty(session.id, cert_code)
             format = _next_format(ready_count)
+            avoid_stems = [
+                item.stem
+                for item in QuestionQueueItem.query.filter_by(
+                    session_id=session.id, cert_code=cert_code
+                ).all()
+            ]
 
-            question = generate_question(
-                cert_name=cert.name,
-                domain=None,
-                difficulty=difficulty,
-                format=format,
-                grounding_text=grounding,
-            )
+            question = None
+            for attempt_num in range(MAX_GENERATION_ATTEMPTS):
+                candidate = generate_question(
+                    cert_name=cert.name,
+                    domain=None,
+                    difficulty=difficulty,
+                    format=format,
+                    grounding_text=grounding,
+                    avoid_stems=avoid_stems,
+                )
+                is_valid, reason = _is_valid_question(candidate, format)
+                if is_valid:
+                    question = candidate
+                    break
+                print(f"  [attempt {attempt_num + 1}/{MAX_GENERATION_ATTEMPTS}] rejected: {reason}")
+
+            if question is None:
+                # Couldn't get a well-formed question after retries --
+                # skip this slot for now rather than insert bad data;
+                # the next poll cycle will try again.
+                break
 
             db.session.add(
                 QuestionQueueItem(
