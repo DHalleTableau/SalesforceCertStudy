@@ -126,11 +126,18 @@ For each slot to fill, the worker prompts Claude with: the cert + a domain chose
 
 Build and commit one **phase** at a time (not one sub-step at a time — see below), each in its own fresh chat session. Use **Sonnet** for implementation (this is mostly straightforward Flask/SQLAlchemy scaffolding, not deep reasoning) — it runs faster and preserves far more context headroom per session than Opus. Reserve Opus for genuinely hard sub-problems if one comes up (e.g., debugging a subtle worker/queue race, refining the question-generation prompt).
 
-**Starting a new phase's session — do these things in this exact order, don't let the model reorder them:**
-1. `cd "$TMPDIR" && git clone https://github.com/DHalleTableau/SalesforceCertStudy.git && cd SalesforceCertStudy` — clone FIRST, into `$TMPDIR`, before anything else touches git. (A naive clone into the default working directory will hit the `.git` write restriction described in Local Environment Notes above and burn a large chunk of context rediscovering the workaround — this has happened more than once. Giving the exact command up front removes the judgment call entirely.)
-2. Read `PLAN.md` and `README.md` in full, including the "Current progress" note right below this list -- it names the exact sub-step to resume at.
-3. Set up the venv per Local Environment Notes' exact `pip install` line (not `-r requirements.txt`), and create a `.env` per that same section, before attempting to run or preview anything.
-4. Then start on the resume point named in "Current progress" below.
+**Starting a new phase's session — the literal command must be IN THE RESUME PROMPT ITSELF, not a pointer to where it's documented.** This was gotten wrong repeatedly: telling a fresh session "clone the repo, read PLAN.md" in prose doesn't work, because the `$TMPDIR` requirement only exists *inside* PLAN.md -- which hasn't been read yet at the moment the model decides where to clone. It defaults to the working directory it's already in, hits the `.git` write restriction (Local Environment Notes above), and burns its context thrashing through workarounds (disabling git template dirs, trying GitHub's raw content API, etc.) before ever reading a single line of this file. **Use this exact block to start any new phase's session (copy-paste, don't paraphrase):**
+
+```
+Run this first, exactly as written:
+cd "$TMPDIR" && git clone https://github.com/DHalleTableau/SalesforceCertStudy.git && cd SalesforceCertStudy
+
+Then read PLAN.md and README.md in full, including the "Current progress" note.
+
+Then set up the venv per Local Environment Notes' exact pip install line (not -r requirements.txt) and create a .env per that same section.
+
+Then resume from the Current progress note below.
+```
 
 **Current progress (update this every time a sub-step finishes or is left mid-way):** Phase 4, sub-step **4f done and verified** (`/session/<id>/review?filter=both|right|wrong` lists a session's `Answer`s joined to their questions, newest first; `_get_review_answers()` shared with the CSV export in 4g so both apply identical filtering). Verified through a real server with 3 seeded answers (2 correct, 1 incorrect): "both" shows all 3, "right" shows exactly the 2 correct, "wrong" shows exactly the 1 incorrect. Next up: **4g** (CSV export).
 
