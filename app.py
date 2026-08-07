@@ -23,7 +23,7 @@ from ingest import (
     save_exam_guides,
     save_prerequisites,
 )
-from models import Cert, StudySession, db, Resource
+from models import Answer, Cert, QuestionQueueItem, StudySession, db, Resource, utcnow
 
 
 def create_app():
@@ -135,7 +135,69 @@ def create_app():
             "session_overview.html", session=study_session, certs=certs
         )
 
+    @app.route("/session/<session_id>/question")
+    @login_required
+    def session_question(session_id):
+        study_session = StudySession.query.get_or_404(session_id)
+        question = _serve_next_ready_question(session_id)
+        return render_template(
+            "question.html", session=study_session, question=question, feedback=None
+        )
+
+    @app.route("/session/<session_id>/answer", methods=["POST"])
+    @login_required
+    def session_answer(session_id):
+        study_session = StudySession.query.get_or_404(session_id)
+        question = QuestionQueueItem.query.get_or_404(request.form.get("question_id"))
+        selected = request.form.getlist("selected")
+
+        is_correct = set(selected) == set(question.correct_json)
+
+        db.session.add(
+            Answer(
+                session_id=session_id,
+                question_id=question.id,
+                user_answer_json=selected,
+                is_correct=is_correct,
+            )
+        )
+        question.status = "answered"
+        db.session.commit()
+
+        feedback = {
+            "is_correct": is_correct,
+            "feedback_md": question.feedback_md,
+            "correct_json": question.correct_json,
+        }
+        next_question = _serve_next_ready_question(session_id)
+
+        return render_template(
+            "question.html",
+            session=study_session,
+            question=next_question,
+            feedback=feedback,
+        )
+
     return app
+
+
+def _serve_next_ready_question(session_id):
+    """Instantly serve the oldest `ready` QuestionQueueItem for a
+    session, marking it `served`. No model call here -- if this
+    returns None, nothing is `ready` yet and the caller shows a
+    "waiting" state; the (separately running) worker fills the queue
+    in the background, never in this request path.
+    """
+    question = (
+        QuestionQueueItem.query.filter_by(session_id=session_id, status="ready")
+        .order_by(QuestionQueueItem.created_at)
+        .first()
+    )
+    if question is not None:
+        question.status = "served"
+        question.served_at = utcnow()
+        db.session.commit()
+    return question
 
 
 def _database_url():
