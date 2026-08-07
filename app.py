@@ -178,7 +178,33 @@ def create_app():
             feedback=feedback,
         )
 
+    @app.route("/session/<session_id>/review")
+    @login_required
+    def session_review(session_id):
+        study_session = StudySession.query.get_or_404(session_id)
+        filter_value = request.args.get("filter", "both")
+        answers = _get_review_answers(session_id, filter_value)
+        return render_template(
+            "review.html",
+            session=study_session,
+            answers=answers,
+            filter_value=filter_value,
+        )
+
     return app
+
+
+def _get_review_answers(session_id, filter_value):
+    """Answers for a session, optionally filtered to right/wrong,
+    newest first. Shared by the review screen (4f) and CSV export
+    (4g) so both apply identical filtering logic.
+    """
+    query = Answer.query.filter_by(session_id=session_id)
+    if filter_value == "right":
+        query = query.filter_by(is_correct=True)
+    elif filter_value == "wrong":
+        query = query.filter_by(is_correct=False)
+    return query.order_by(Answer.answered_at.desc()).all()
 
 
 def _serve_next_ready_question(session_id):
