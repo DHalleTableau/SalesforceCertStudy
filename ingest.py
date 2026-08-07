@@ -160,19 +160,45 @@ def save_prerequisites(parsed_edges):
 
     Skips an edge if that exact (cert_code, prereq_cert_code) pair
     already exists, so re-pasting the same sheet content is idempotent.
-    Must be called inside a Flask app context.
+
+    Also skips (and reports, rather than crashing) any edge whose
+    cert_code or prereq_cert_code isn't a known Cert -- a real
+    recurring risk with paste-based ingestion: the two tabs can drift
+    (a rename, a typo, a cert added to one tab but not the other).
+    SQLite silently allowed this dangling reference in earlier local
+    testing since it doesn't enforce foreign keys by default; Postgres
+    correctly rejects it, which is what surfaced this gap in the first
+    place. Must be called inside a Flask app context.
+
+    Returns a list of skipped edges (each with a "reason" key) so the
+    caller can surface them instead of silently dropping data.
     """
-    from models import db, CertPrerequisite
+    from models import db, Cert, CertPrerequisite
+
+    known_codes = {c.cert_code for c in Cert.query.all()}
+    skipped = []
 
     for edge in parsed_edges:
+        cert_code = edge["cert_code"]
+        prereq_cert_code = edge["prereq_cert_code"]
+
+        if cert_code not in known_codes:
+            skipped.append({**edge, "reason": f"'{cert_code}' not found in Exam Guides tab"})
+            continue
+        if prereq_cert_code not in known_codes:
+            skipped.append(
+                {**edge, "reason": f"'{prereq_cert_code}' not found in Exam Guides tab"}
+            )
+            continue
+
         exists = CertPrerequisite.query.filter_by(
-            cert_code=edge["cert_code"],
-            prereq_cert_code=edge["prereq_cert_code"],
+            cert_code=cert_code, prereq_cert_code=prereq_cert_code
         ).first()
         if exists is None:
             db.session.add(CertPrerequisite(**edge))
 
     db.session.commit()
+    return skipped
 
 
 class _VisibleTextExtractor(HTMLParser):

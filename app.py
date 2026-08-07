@@ -60,7 +60,7 @@ def create_app():
             prereq_edges = parse_prerequisites_csv(
                 request.form.get("prerequisites_csv", "")
             )
-            save_prerequisites(prereq_edges)
+            skipped_prereq_edges = save_prerequisites(prereq_edges)
 
             fetch_counts = fetch_pending_resources()
 
@@ -68,6 +68,7 @@ def create_app():
                 "exam_guide_rows": len(exam_guide_rows),
                 "certs_touched": len(certs_touched),
                 "prereq_edges": len(prereq_edges),
+                "skipped_prereq_edges": skipped_prereq_edges,
                 "fetched": fetch_counts["fetched"],
                 "blocked": fetch_counts["blocked"],
             }

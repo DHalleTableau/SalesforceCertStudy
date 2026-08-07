@@ -47,6 +47,19 @@
   </div>
   {% endif %}
 
+  {% if summary and summary.skipped_prereq_edges %}
+  <div class="blocked">
+    <h2>Prerequisite edges skipped</h2>
+    <p>These reference a cert not found in the Exam Guides tab &mdash;
+       check for a naming mismatch or a cert missing from that tab.</p>
+    <ul>
+      {% for edge in summary.skipped_prereq_edges %}
+      <li>{{ edge.cert_code }} &rarr; {{ edge.prereq_cert_code }}: {{ edge.reason }}</li>
+      {% endfor %}
+    </ul>
+  </div>
+  {% endif %}
+
   {% if blocked_resources %}
   <h2>Pages that couldn't be auto-fetched</h2>
   <p>
