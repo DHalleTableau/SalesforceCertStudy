@@ -7,8 +7,13 @@ PLAN.md for the full architecture and phase breakdown.
 """
 import os
 
+from dotenv import load_dotenv
+
+load_dotenv()
+
 from flask import Flask, jsonify, redirect, render_template, request, url_for
 
+from auth import login_required, register_auth_routes
 from ingest import (
     fetch_pending_resources,
     parse_exam_guides_csv,
@@ -32,11 +37,14 @@ def create_app():
     with app.app_context():
         db.create_all()
 
+    register_auth_routes(app)
+
     @app.route("/healthz")
     def healthz():
         return jsonify(status="ok")
 
     @app.route("/admin/ingest", methods=["GET", "POST"])
+    @login_required
     def admin_ingest():
         summary = None
         if request.method == "POST":
@@ -71,6 +79,7 @@ def create_app():
         )
 
     @app.route("/admin/ingest/paste-resource", methods=["POST"])
+    @login_required
     def admin_paste_resource():
         resource_id = request.form.get("resource_id")
         pasted_text = request.form.get("pasted_text", "").strip()
