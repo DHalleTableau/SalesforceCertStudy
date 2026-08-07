@@ -46,11 +46,20 @@ every step:
       support), a Flask app that boots and creates tables, `worker.py`
       stub, `requirements.txt`, `runtime.txt`, `Procfile`,
       `.env.example`, `.gitignore`.
-- [ ] Phase 2 — Resource ingestion (2-tab Google Sheet, pasted CSV/TSV
-      text → `resources`/`cert_prerequisites`, two-tier fetch/paste for
-      individual Exam Guide pages).
-- [ ] Phase 3 — Worker + question generation (`claude_client.py`, cert
-      overview derivation, on-demand top-up loop).
+- [x] **Phase 2 — Resource ingestion.** `ingest.py` (CSV parsing +
+      SQLAlchemy upserts for both sheet tabs + Tier-1 fetch/Tier-2
+      paste), `/admin/ingest` route + template. Verified against real
+      sheet data: 86 certs, correct aggregate flags, a real 3-level
+      prerequisite chain. Note: Tier-1 auto-fetch essentially never
+      succeeds for this sheet's real Exam_Guide_URLs (they're
+      JS-rendered Experience Cloud pages) — expect to use the
+      per-resource paste box for any cert you actually want grounded.
+- [x] **Phase 3 (in progress) — Worker + question generation.**
+      `claude_client.py` (question generation + cert-overview
+      derivation, both verified against the real internal gateway),
+      `worker.py`'s on-demand top-up loop (verified: fills a session's
+      queue to 5 ready rows with long-form feedback intact). See
+      PLAN.md for the internal-gateway credential/protocol details.
 - [ ] Phase 4 — Question UI + review/export.
 - [ ] Phase 5 — Heroku deploy.
 

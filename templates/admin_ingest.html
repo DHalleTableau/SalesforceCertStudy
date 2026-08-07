@@ -1,0 +1,71 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Ingest Sheet Data</title>
+  <style>
+    body { font-family: sans-serif; max-width: 900px; margin: 2rem auto; }
+    textarea { width: 100%; font-family: monospace; }
+    .summary { background: #eef; padding: 1rem; border-radius: 4px; }
+    .blocked { background: #fff3e0; padding: 1rem; border-radius: 4px; margin-top: 0.5rem; }
+    .blocked textarea { min-height: 6rem; }
+  </style>
+</head>
+<body>
+  <h1>Paste Sheet Tabs</h1>
+  <p>
+    Copy each tab of the Google Sheet (e.g. via File &rarr; Download &rarr; CSV,
+    or a plain copy of the cell range) and paste its contents below. See
+    PLAN.md's "Locked-in decisions" for why this is paste-only rather than
+    a live fetch.
+  </p>
+
+  <form method="post">
+    <label for="exam_guides_csv"><strong>Exam Guides</strong> tab (CSV)</label><br>
+    <textarea id="exam_guides_csv" name="exam_guides_csv" rows="14"></textarea>
+
+    <p></p>
+
+    <label for="prerequisites_csv"><strong>Certification Prerequisites</strong> tab (CSV)</label><br>
+    <textarea id="prerequisites_csv" name="prerequisites_csv" rows="10"></textarea>
+
+    <p></p>
+
+    <button type="submit">Ingest</button>
+  </form>
+
+  {% if summary %}
+  <div class="summary">
+    <h2>Result</h2>
+    <ul>
+      <li>Exam Guide rows parsed: {{ summary.exam_guide_rows }}</li>
+      <li>Certs touched: {{ summary.certs_touched }}</li>
+      <li>Prerequisite edges parsed: {{ summary.prereq_edges }}</li>
+      <li>Exam guide pages auto-fetched: {{ summary.fetched }}</li>
+      <li>Exam guide pages needing a manual paste: {{ summary.blocked }}</li>
+    </ul>
+  </div>
+  {% endif %}
+
+  {% if blocked_resources %}
+  <h2>Pages that couldn't be auto-fetched</h2>
+  <p>
+    These Exam_Guide_URLs came back blocked or JS-rendered (Tier 1
+    couldn't read them). Paste each page's content below to supply it
+    manually (Tier 2).
+  </p>
+  {% for resource in blocked_resources %}
+  <div class="blocked">
+    <strong>{{ resource.cert_code }}</strong> &mdash;
+    <a href="{{ resource.url }}" target="_blank">{{ resource.url }}</a>
+    {% if resource.pasted_text %}<em>(already pasted)</em>{% endif %}
+    <form method="post" action="{{ url_for('admin_paste_resource') }}">
+      <input type="hidden" name="resource_id" value="{{ resource.id }}">
+      <textarea name="pasted_text">{{ resource.pasted_text or '' }}</textarea>
+      <button type="submit">Save paste</button>
+    </form>
+  </div>
+  {% endfor %}
+  {% endif %}
+</body>
+</html>
