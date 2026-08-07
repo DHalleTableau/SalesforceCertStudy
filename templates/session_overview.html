@@ -40,6 +40,6 @@
   </div>
   {% endfor %}
 
-  <p>The question loop is added in the next sub-step.</p>
+  <p><a href="{{ url_for('session_question', session_id=session.id) }}">Start practicing &rarr;</a></p>
 </body>
 </html>
