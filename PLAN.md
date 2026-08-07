@@ -108,8 +108,17 @@ Target repo: **https://github.com/DHalleTableau/SalesforceCertStudy**.
   structurally not just in prose, trailing tool-call-artifact
   stripping on long text fields, validate+retry. Full debugging story
   in HISTORY.md if this resurfaces in a new form.
-  - **Still unconfirmed:** whether the deployed Heroku `worker` dyno
-    can reach this gateway — Phase 5's first check.
+  - **Confirmed BLOCKED (Phase 5's first check):** the deployed
+    `worker` dyno cannot reach the gateway — `heroku run` from inside
+    `sf-cert-study` gets `httpx.ConnectTimeout` (TCP-level, not
+    auth/TLS/4xx), meaning the gateway is unreachable from Heroku's
+    network entirely, almost certainly because it's locked to
+    Salesforce's internal network the same way the deployed app itself
+    needed VPN + a Trusted IP Range to be reachable. Unresolved as of
+    now — needs either a Private Space peering connection to
+    Salesforce's internal network, an IP allowlist on the gateway's
+    side for Heroku's outbound IPs, or a different access pattern
+    entirely. See HISTORY.md for the full diagnostic chain.
 - **Worker model:** on-demand top-up only (queue < 5 ready AND a
   session is active; idle otherwise).
 - **Review export:** CSV download + in-app filterable screen.

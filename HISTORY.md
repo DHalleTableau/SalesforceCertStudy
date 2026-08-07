@@ -231,3 +231,37 @@ that swept `.venv`.
   the already-known-blocked Trailhead certificate pages. In practice,
   `Resource.pasted_text` (Tier 2, filled in manually) is the content
   that actually matters — not `fetched_text`.
+
+## Phase 5: worker cannot reach the internal gateway (open, unresolved)
+
+`heroku run -a sf-cert-study -- python3 -c "from claude_client import
+_build_client; c = _build_client(); print(c.models.list())"` failed
+with `httpx.ConnectTimeout` / `openai.APITimeoutError`. This is a
+TCP-level connect timeout, not an auth failure, TLS error, or HTTP 4xx
+-- the connection to the gateway never establishes at all from inside
+the Heroku dyno.
+
+Same underlying pattern as the web-access block found earlier in this
+phase: the app's own public URL returned 403 from Heroku's router
+until accessed over the Salesforce VPN with the right IP in the
+space's Trusted IP Ranges. The gateway is almost certainly similarly
+locked to Salesforce's internal network -- a Heroku dyno's outbound
+traffic (from `sf-cert-study`'s Outbound IPs: 44.218.186.40,
+54.86.78.213, 54.174.229.51, plus an IPv6 block) isn't part of that
+network, so the connection is dropped before it ever reaches the
+gateway.
+
+Not yet resolved. Plausible fixes, none yet attempted:
+- A Private Space peering / AWS PrivateLink connection from
+  `se-smb-internal` into Salesforce's internal network (if such a
+  thing exists for this org).
+- An IP allowlist on the gateway's own side that could be given
+  Heroku's outbound IPs.
+- A different access pattern entirely (e.g. a proxy running inside
+  Salesforce's network that Heroku calls through).
+
+Next step: check for internal documentation on server-to-server /
+programmatic access to this gateway (as opposed to a developer's
+laptop over VPN) -- same category of "undocumented internal setup" as
+the original gateway credentials (see "The internal Claude gateway"
+section above), likely already solved by someone else in the org.
