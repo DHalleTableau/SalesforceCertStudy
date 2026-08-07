@@ -188,7 +188,7 @@ grading) + primary-weighted grounding excerpts → structured question
 `app.py` (web routes), `worker.py` (top-up loop), `claude_client.py`
 (model calls + grounding assembly), `models.py`, `ingest.py`,
 `cert_resolution.py`, `auth.py`, `templates/`, `Procfile`,
-`requirements.txt`, `runtime.txt`, `.env.example`, `.gitignore`.
+`requirements.txt`, `.python-version`, `.env.example`, `.gitignore`.
 
 ## Secrets & Config
 

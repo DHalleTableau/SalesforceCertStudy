@@ -52,7 +52,7 @@ every step:
       tables for resources/certs/cert_prerequisites/sessions/
       question_queue/answers, including aggregate-cert and prerequisite
       support), a Flask app that boots and creates tables, `worker.py`
-      stub, `requirements.txt`, `runtime.txt`, `Procfile`,
+      stub, `requirements.txt`, `.python-version`, `Procfile`,
       `.env.example`, `.gitignore`.
 - [x] **Phase 2 — Resource ingestion.** `ingest.py` (CSV parsing +
       SQLAlchemy upserts for both sheet tabs + Tier-1 fetch/Tier-2

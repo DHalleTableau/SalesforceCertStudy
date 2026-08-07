@@ -163,6 +163,43 @@ resume prompt to use it verbatim, never to improvise a check with
 here has twice now caused the session to invent its own recovery step
 that swept `.venv`.
 
+## Phase 5 deploy findings
+
+- **The `se-smb` Heroku Enterprise team's apps default to the `cnb`
+  (Cloud Native Buildpacks) stack, not a classic Heroku stack.** First
+  sign: `heroku create --space se-smb-internal` (a Private Space)
+  produced an app with `Stack: cnb`. Consequence: `runtime.txt` is
+  rejected outright at build time ("The runtime.txt file isn't
+  supported... replaced by .python-version") — not a warning, a hard
+  build failure. Fixed by deleting `runtime.txt` and adding
+  `.python-version` containing just the major version (`3.13`, no
+  patch version, no `python-` prefix, no quotes) per Heroku's own error
+  message. `Procfile` and `requirements.txt` were unaffected.
+- **Postgres add-on service slug is `heroku-postgresql`, not
+  `heroku-postgres`** on this org's catalog (`heroku addons:plans
+  heroku-postgres` → "Couldn't find that add-on service"). Find the
+  real slug with `heroku addons:services | grep -i postgres` rather
+  than assuming the commonly-documented slug.
+- **Essential-tier Postgres plans don't support Private Spaces.** An
+  app created inside a space (`se-smb-internal` here) needs at least
+  Standard tier (`heroku-postgresql:standard-0`) — Essential-0/1/2 are
+  Common Runtime only.
+- **Smart-quote paste corruption in `heroku config:set`.** Copy-pasting
+  a multi-value `config:set` command with `"..."`-quoted values into a
+  terminal produced a stuck `dquote>` prompt — the straight double
+  quotes had been silently converted to curly/smart quotes somewhere in
+  the copy path, so bash never saw a matching closing quote. Fixed by
+  dropping quotes entirely for values with no spaces (tokens, URLs,
+  usernames, passwords) — `VAR=value` with no quotes at all, which
+  isn't vulnerable to this since there's no quote character to mangle.
+- **A `config:set` command with unfilled placeholder text
+  (`<your token here>`) sets the literal placeholder string as the
+  var's value with no error** — Heroku has no way to know it wasn't a
+  real value. Caught by grepping `heroku config --shell` for the
+  affected var names after every `config:set` and eyeballing for
+  placeholder-looking text, not by assuming the command succeeded
+  because it exited cleanly.
+
 ## Other resolved quirks
 
 - **Writes to any directory literally named `.git` fail** under the
