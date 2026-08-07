@@ -1,0 +1,42 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Start a Study Session</title>
+  <style>
+    body { font-family: sans-serif; max-width: 700px; margin: 2rem auto; }
+    label { display: block; margin: 0.3rem 0; }
+  </style>
+</head>
+<body>
+  <h1>Start a Study Session</h1>
+
+  {% if prompt %}
+  <p>
+    <strong>{{ prompt.name }}</strong> has one or more prerequisite
+    certifications. Also include practice questions from its
+    prerequisite(s) in this session?
+  </p>
+  <form method="post">
+    {% for code in selected_cert_codes %}
+    <input type="hidden" name="cert_codes" value="{{ code }}">
+    {% endfor %}
+    <input type="hidden" name="answered_json" value='{{ answered_json }}'>
+    <input type="hidden" name="prompt_cert_code" value="{{ prompt.cert_code }}">
+    <button type="submit" name="answer" value="yes">Yes, include prerequisites</button>
+    <button type="submit" name="answer" value="no">No, just this cert</button>
+  </form>
+
+  {% else %}
+  <form method="post">
+    {% for cert in certs %}
+    <label>
+      <input type="checkbox" name="cert_codes" value="{{ cert.cert_code }}">
+      {{ cert.name }}{% if cert.is_aggregate %} (aggregate){% endif %}
+    </label>
+    {% endfor %}
+    <button type="submit">Start Session</button>
+  </form>
+  {% endif %}
+</body>
+</html>

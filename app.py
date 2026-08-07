@@ -5,6 +5,7 @@ generation lives in worker.py (Phase 3). Login, session setup, the
 question loop, and review/export routes are added in later phases; see
 PLAN.md for the full architecture and phase breakdown.
 """
+import json
 import os
 
 from dotenv import load_dotenv
@@ -14,6 +15,7 @@ load_dotenv()
 from flask import Flask, jsonify, redirect, render_template, request, url_for
 
 from auth import login_required, register_auth_routes
+from cert_resolution import resolve_certs
 from ingest import (
     fetch_pending_resources,
     parse_exam_guides_csv,
@@ -21,7 +23,7 @@ from ingest import (
     save_exam_guides,
     save_prerequisites,
 )
-from models import db, Resource
+from models import Cert, StudySession, db, Resource
 
 
 def create_app():
@@ -88,6 +90,38 @@ def create_app():
             resource.pasted_text = pasted_text
             db.session.commit()
         return redirect(url_for("admin_ingest"))
+
+    @app.route("/session/setup", methods=["GET", "POST"])
+    @login_required
+    def session_setup():
+        if request.method == "GET":
+            certs = Cert.query.order_by(Cert.name).all()
+            return render_template("session_setup.html", certs=certs, prompt=None)
+
+        selected_cert_codes = request.form.getlist("cert_codes")
+        answered_prompts = json.loads(request.form.get("answered_json", "{}"))
+
+        prompt_cert_code = request.form.get("prompt_cert_code")
+        if prompt_cert_code:
+            answered_prompts[prompt_cert_code] = request.form.get("answer") == "yes"
+
+        result = resolve_certs(selected_cert_codes, answered_prompts)
+
+        if result["pending_prompt"]:
+            prompt_cert = Cert.query.get(result["pending_prompt"])
+            return render_template(
+                "session_setup.html",
+                certs=None,
+                prompt=prompt_cert,
+                selected_cert_codes=selected_cert_codes,
+                answered_json=json.dumps(answered_prompts),
+            )
+
+        study_session = StudySession(cert_codes=result["resolved"], status="active")
+        db.session.add(study_session)
+        db.session.commit()
+
+        return render_template("session_created.html", session=study_session)
 
     return app
 
