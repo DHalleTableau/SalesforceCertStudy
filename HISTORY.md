@@ -100,6 +100,44 @@ resume prompt text itself, not as a pointer to documentation. See
 resume block — always use it verbatim, never paraphrase "clone the
 repo, read the docs."
 
+## The autocompact-thrashing incident (Phase 4, after the clone-location fix)
+
+Fixing the clone-location prose problem above (putting the literal
+`cd`+`git clone` command directly in the resume prompt) did NOT fully
+fix repeated fresh-session context failures — sessions still hit
+context almost immediately, even with a much-trimmed `PLAN.md` and
+with unrelated MCP tool connectors disabled (ruling out both "docs too
+big" and "unrelated tool schemas too big" as the dominant cause,
+though both were reasonable hypotheses at the time and the trimming
+was still worth keeping).
+
+The actual system message on a later attempt was specific: "Autocompact
+is thrashing: the context refilled to the limit within 3 turns of the
+previous compact, 3 times in a row. A file being read or a tool output
+is likely too large for the context window." That pointed at one huge
+recurring output, not gradual accumulation.
+
+Root cause, found by inspecting the actual checkout: **`.venv`
+contains 5000+ files** (every installed package's files). The
+sequence that likely triggered it: the resume prompt said "read
+PLAN.md" without an absolute path; the `Read` tool requires an
+absolute path (Bash's `cd` doesn't carry over to it); a relative
+`Read("PLAN.md")` right after cloning fails; the session then likely
+tried to recover by exploring the directory (`ls -R`, `find .`, or
+similar) to locate the file, which — run from the repo root without
+excluding `.venv` — dumps a massive listing into context in one shot.
+That alone can exceed a compact's worth of headroom, and if the
+recovery attempt repeats, it thrashes exactly as described.
+
+Fixed by making the resume prompt explicit about both failure points:
+run `pwd` right after cloning and use that literal absolute path for
+every subsequent file read, and never run a recursive listing/search
+from the checkout root (`.venv`'s file count called out explicitly as
+the reason). Both now also stated as standing rules in Local
+Environment Notes, not just the resume block, since the "no recursive
+listing" rule matters any time work happens in this checkout, not only
+at session start.
+
 ## Other resolved quirks
 
 - **Writes to any directory literally named `.git` fail** under the

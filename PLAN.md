@@ -11,6 +11,16 @@
 - **Clone into `$TMPDIR`, not the default working directory** — `.git`
   writes fail elsewhere in this sandbox. The exact command is in the
   resume prompt below; use it literally, do not paraphrase it.
+- **Never run a broad recursive listing or search from this
+  directory** (`ls -R`, `find .`, `grep -r .`, etc.) — `.venv` alone
+  contains 5000+ installed-package files. One such command dumps a
+  massive listing into context in one shot and can single-handedly
+  cause repeated autocompact thrashing (context refills to the limit
+  within a couple of turns of every compact). Only read specific,
+  named files with their full absolute path. Relatedly: the
+  Read/Write/Edit tools need an **absolute** path — a Bash `cd` does
+  not carry over to them, so `Read("PLAN.md")` right after cloning
+  will fail; use the full path (e.g. from `pwd` right after cloning).
 - **Local venv setup** (`pip install -r requirements.txt` fails here
   on `psycopg2-binary` — see HISTORY.md):
   ```bash
@@ -190,9 +200,18 @@ command, not a pointer to where it's documented):
 
 ```
 Run this first, exactly as written:
-cd "$TMPDIR" && git clone https://github.com/DHalleTableau/SalesforceCertStudy.git && cd SalesforceCertStudy
+cd "$TMPDIR" && git clone https://github.com/DHalleTableau/SalesforceCertStudy.git ; cd SalesforceCertStudy && pwd
 
-Then read PLAN.md and README.md in full, including the "Current progress" note.
+The Read/Write/Edit tools need an ABSOLUTE path -- Bash's cd does NOT
+carry over to them. Take the absolute path printed by pwd above and
+use it for every file read from here on: read <that path>/PLAN.md and
+<that path>/README.md in full (a relative Read("PLAN.md") will fail).
+
+Do NOT run any recursive directory listing or search (ls -R, find .,
+grep -r) from this directory. .venv alone contains 5000+ installed-
+package files -- one such command will dump a massive listing into
+context and can single-handedly cause repeated autocompact thrashing.
+Only read specific, named files with their full absolute path.
 
 Then set up the venv per Local Environment Notes' exact pip install line (not -r requirements.txt) and create a .env per that same section.
 
