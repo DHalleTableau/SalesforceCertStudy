@@ -63,15 +63,19 @@ def _build_client():
     ANTHROPIC_BASE_URL as the gateway URL -- names kept matching the
     org's Claude Code setup docs even though the wire protocol turned
     out to be OpenAI-shaped, not Anthropic's). SALESFORCE_CA_BUNDLE
-    points at a PEM file of the org's internal certificate authorities
-    (export via `security find-certificate -a -p
-    /Library/Keychains/System.keychain` on a corporate-managed Mac) so
-    TLS trusts the internal gateway's certificate.
+    trusts the internal gateway's certificate, and can be either a path
+    to a PEM file (local dev, export via `security find-certificate -a
+    -p /Library/Keychains/System.keychain` on a corporate-managed Mac)
+    or the raw PEM content itself (Heroku -- a dyno has no access to
+    the Mac's keychain, so the cert content is set directly as the
+    config var and written to a temp file here instead).
     """
     import httpx
     from openai import OpenAI
 
     ca_bundle = os.environ.get("SALESFORCE_CA_BUNDLE")
+    if ca_bundle and "BEGIN CERTIFICATE" in ca_bundle:
+        ca_bundle = _write_ca_bundle_to_tempfile(ca_bundle)
     http_client = httpx.Client(verify=ca_bundle) if ca_bundle else None
 
     return OpenAI(
@@ -79,6 +83,15 @@ def _build_client():
         base_url=os.environ["ANTHROPIC_BASE_URL"],
         http_client=http_client,
     )
+
+
+def _write_ca_bundle_to_tempfile(pem_content):
+    import tempfile
+
+    path = os.path.join(tempfile.gettempdir(), "salesforce-ca-bundle.pem")
+    with open(path, "w") as f:
+        f.write(pem_content)
+    return path
 
 
 def _generate_question_tool(format):
