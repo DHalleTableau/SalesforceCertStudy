@@ -15,18 +15,22 @@ with OpenAI-style function-calling for structured output, rather than
 the `anthropic` package. Confirmed working against a real request.
 """
 import os
+import random
 
 MODEL = os.environ.get("CLAUDE_MODEL", "claude-sonnet-5")
 
 
-def assemble_grounding_text(cert_code, max_chars=12000):
+def assemble_grounding_text(cert_code, max_chars=200000):
     """Build the grounding text passed to the model for a given cert.
 
     Primary (Base) resources are listed first, labeled PRIMARY SOURCE;
     additional resources follow, labeled ADDITIONAL SOURCE -- this is
     how "primary sources are weighted most heavily" (PLAN.md) is
     actually implemented: ordering + labeling, trusting the model to
-    follow the label, rather than a numeric weighting scheme.
+    follow the label, rather than a numeric weighting scheme. Within
+    the same role, resources are shuffled -- with several primary
+    sources, always concatenating them in the same order contributed
+    to the model always landing on the same early material.
 
     For each resource, prefers `pasted_text` over `fetched_text`: per
     PLAN.md's Phase 2 finding, Tier-1 auto-fetch essentially never
@@ -34,8 +38,12 @@ def assemble_grounding_text(cert_code, max_chars=12000):
     Salesforce Help pages), so pasted_text is the content that
     actually matters in practice. Resources with neither are skipped.
 
-    Truncates to max_chars total (primary content is assembled first,
-    so it's the last thing cut if truncation kicks in).
+    If the assembled text exceeds max_chars, returns a random
+    contiguous window of that length rather than always the first
+    max_chars -- a fixed prefix meant every call saw the same slice of
+    long source material and kept generating questions from the same
+    handful of early facts. Text under max_chars is returned whole,
+    unwindowed.
 
     Must be called inside a Flask app context. Returns "" if the cert
     has no usable grounding content at all -- callers should treat
@@ -44,7 +52,11 @@ def assemble_grounding_text(cert_code, max_chars=12000):
     from models import Resource
 
     resources = Resource.query.filter_by(cert_code=cert_code).all()
-    resources.sort(key=lambda r: 0 if r.role == "primary" else 1)
+    primary = [r for r in resources if r.role == "primary"]
+    additional = [r for r in resources if r.role != "primary"]
+    random.shuffle(primary)
+    random.shuffle(additional)
+    resources = primary + additional
 
     sections = []
     for resource in resources:
@@ -54,7 +66,13 @@ def assemble_grounding_text(cert_code, max_chars=12000):
         label = "PRIMARY SOURCE" if resource.role == "primary" else "ADDITIONAL SOURCE"
         sections.append(f"=== {label}: {resource.url} ===\n{content.strip()}")
 
-    return "\n\n".join(sections)[:max_chars]
+    full_text = "\n\n".join(sections)
+    if len(full_text) <= max_chars:
+        return full_text
+
+    max_start = len(full_text) - max_chars
+    start = random.randint(0, max_start)
+    return full_text[start : start + max_chars]
 
 
 def _build_client():
@@ -208,9 +226,10 @@ def generate_question(
         question every time.
 
     Returns a dict with keys: stem, options (list of {key, text}),
-    correct (list of option keys), feedback_md, plus the format and
-    difficulty passed in (echoed back so the caller doesn't have to
-    track them separately when building a QuestionQueueItem).
+    correct (list of option keys), feedback_md, plus the format,
+    difficulty, and domain passed in (echoed back so the caller
+    doesn't have to track them separately when building a
+    QuestionQueueItem).
     """
     import json
 
@@ -287,6 +306,7 @@ Call submit_question with the question. feedback_md must be long-form: explain w
         "feedback_md": _strip_tool_call_artifacts(parsed.get("feedback_md", "")),
         "format": format,
         "difficulty": difficulty,
+        "domain": domain,
     }
     return result
 

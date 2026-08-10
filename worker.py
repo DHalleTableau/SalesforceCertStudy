@@ -58,14 +58,31 @@ def _next_difficulty(session_id, cert_code):
 
 
 def _next_format(ready_count):
-    """Simple mix: every 3rd generated question is multi-select.
-
-    Weak-domain targeting (picking `domain` from the user's incorrect-
-    answer history) is deferred -- domain=None below lets the model
-    choose from the grounding content for now. Refine once there's
-    real answer history to target against.
-    """
+    """Simple mix: every 3rd generated question is multi-select."""
     return "multi" if ready_count % 3 == 2 else "single"
+
+
+def _next_domain(cert):
+    """Round-robin through cert.domains_json instead of leaving domain
+    choice open -- left as None, the model kept defaulting to whatever
+    was most prominent in the grounding text, regardless of how many
+    other domains the cert actually covers.
+
+    NOT full weak-domain targeting (picking domain from the user's
+    incorrect-answer history) -- that's still deferred until there's
+    real answer history to target against. This just guarantees each
+    call is explicitly pointed at a different domain in rotation.
+    Falls back to None (let the model choose) if the cert's overview
+    hasn't been derived yet, or it has no domain breakdown.
+    """
+    domains = cert.domains_json or []
+    if not domains:
+        return None
+    total_count = QuestionQueueItem.query.filter_by(cert_code=cert.cert_code).count()
+    return domains[total_count % len(domains)]["name"]
+
+
+AVOID_STEMS_LIMIT = 40
 
 
 MAX_GENERATION_ATTEMPTS = 5
@@ -125,18 +142,26 @@ def top_up_session(session):
 
             difficulty = _next_difficulty(session.id, cert_code)
             format = _next_format(ready_count)
+
+            # Cross-session, not just this session's: nothing stopped a
+            # brand-new session from repeating a question asked in an
+            # earlier one. Capped to the most recent AVOID_STEMS_LIMIT so
+            # the prompt doesn't grow unbounded over weeks of practice.
             avoid_stems = [
                 item.stem
-                for item in QuestionQueueItem.query.filter_by(
-                    session_id=session.id, cert_code=cert_code
-                ).all()
+                for item in QuestionQueueItem.query.filter_by(cert_code=cert_code)
+                .order_by(QuestionQueueItem.created_at.desc())
+                .limit(AVOID_STEMS_LIMIT)
+                .all()
             ]
+
+            domain = _next_domain(cert)
 
             question = None
             for attempt_num in range(MAX_GENERATION_ATTEMPTS):
                 candidate = generate_question(
                     cert_name=cert.name,
-                    domain=None,
+                    domain=domain,
                     difficulty=difficulty,
                     format=format,
                     grounding_text=grounding,
@@ -170,7 +195,10 @@ def top_up_session(session):
             )
             db.session.commit()
             ready_count += 1
-            print(f"  generated {cert_code} [{format}] ready={ready_count}/{READY_THRESHOLD}")
+            print(
+                f"  generated {cert_code} [{format}] domain={domain} "
+                f"ready={ready_count}/{READY_THRESHOLD}"
+            )
 
 
 def main():
