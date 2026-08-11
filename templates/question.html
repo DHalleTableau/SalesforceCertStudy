@@ -2,6 +2,9 @@
 <html>
 <head>
   <meta charset="utf-8">
+  {% if not question %}
+  <meta http-equiv="refresh" content="3">
+  {% endif %}
   <title>Practice Question</title>
   <style>
     body { font-family: sans-serif; max-width: 700px; margin: 2rem auto; }
@@ -39,8 +42,10 @@
   </form>
   {% else %}
   <p class="waiting">
-    Waiting for the next question to be generated...
-    <a href="{{ url_for('session_question', session_id=session.id) }}">Refresh</a>
+    Generating your first question -- this can take up to 30 seconds.
+    This page will refresh automatically; no need to reload it
+    yourself. (If it doesn't,
+    <a href="{{ url_for('session_question', session_id=session.id) }}">refresh manually</a>.)
   </p>
   {% endif %}
 </body>

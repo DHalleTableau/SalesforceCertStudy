@@ -46,7 +46,7 @@ def register_auth_routes(app):
 
             if valid:
                 session["logged_in"] = True
-                next_path = request.args.get("next") or url_for("admin_ingest")
+                next_path = request.args.get("next") or url_for("session_setup")
                 return redirect(next_path)
             error = "Invalid username or password."
 

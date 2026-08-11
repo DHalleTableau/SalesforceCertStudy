@@ -40,6 +40,13 @@
   </div>
   {% endfor %}
 
+  <p class="pending">
+    The first question can take up to 30 seconds to generate -- the
+    next page will refresh itself automatically while it waits, so
+    there's no need to reload it yourself. Every question after the
+    first is pre-generated in the background, so there's no delay
+    once you get going.
+  </p>
   <p><a href="{{ url_for('session_question', session_id=session.id) }}">Start practicing &rarr;</a></p>
 </body>
 </html>
