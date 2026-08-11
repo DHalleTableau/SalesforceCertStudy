@@ -365,3 +365,28 @@ Lesson: if `$TMPDIR/SalesforceCertStudy` is ever gone, the assistant
 cannot self-heal by re-cloning -- always hand the exact `mkdir -p
 $TMPDIR && cd $TMPDIR && git clone ...` command to the user to run in
 their own terminal first.
+
+## Procfile never bound to an address at all (found via admin feedback)
+
+The `se-smb` admins reported "we need to bind to the IPv6 address" and
+that the app appeared to be crashing, separately from an access bug
+they were independently investigating. They also said Trusted IP
+Ranges shouldn't be needed for this app at all -- "it should work as
+configured" -- which meant the earlier Trusted-IP-Ranges diagnosis
+(the fix that got a real 403 to go away) was real and worth doing
+regardless, but likely wasn't the *whole* story, and possibly wasn't
+even the actual root cause of what the admins were seeing when they
+tested it themselves.
+
+Checked `Procfile`: `web: gunicorn app:app` -- no `--bind` flag at
+all. Gunicorn's default bind is `127.0.0.1:8000`, not
+`0.0.0.0:$PORT` or any address Heroku's router can actually reach.
+This is a real, independent bug: a dyno bound only to localhost would
+never be reachable from the platform's router no matter what
+IP-allowlist state the surrounding space is in, and would plausibly
+present as exactly what the admins described ("crashing"/
+inaccessible) if their own testing bypassed whatever the Trusted-IP
+issue was in some other way.
+
+Fixed by binding explicitly to the IPv6 wildcard per the admins'
+specific guidance: `web: gunicorn app:app --bind [::]:$PORT`.
