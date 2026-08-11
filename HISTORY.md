@@ -390,3 +390,27 @@ issue was in some other way.
 
 Fixed by binding explicitly to the IPv6 wildcard per the admins'
 specific guidance: `web: gunicorn app:app --bind [::]:$PORT`.
+
+## Playwright broke the Heroku build (greenlet has no prebuilt wheel there)
+
+Adding `playwright`/`trafilatura` to `requirements.txt` (for the
+Tier-1 auto-fetch rewrite) broke `git push heroku main`: `greenlet`
+(a transitive dependency of `playwright`'s sync API) has no prebuilt
+wheel for this Python version on Heroku's `cnb` build image, and
+compiling it from source failed (`g++`... `returned non-zero exit
+status 1`).
+
+Even if that compiled, it wouldn't have helped -- a standard Heroku
+dyno has no Chromium binary and can't run one without a dedicated
+Playwright/Chromium buildpack (already flagged as a known, deferred
+limitation when this feature was planned: ingestion only ever runs
+via the local `app.py` workaround, never on the deployed app).
+
+Fixed by removing `playwright`/`trafilatura` from `requirements.txt`
+entirely and documenting them as a separate **local-only** `pip
+install` step in `PLAN.md` instead. `requirements.txt` now installs
+cleanly on both local (`pip install -r requirements.txt`) and Heroku's
+build. General lesson: a dependency only ever used by a local-only
+workflow doesn't belong in the file Heroku's build reads, even if it's
+also used locally -- `requirements.txt` should reflect what `web`/
+`worker` actually need, not everything installed in the local venv.

@@ -27,14 +27,21 @@
   ```bash
   cd "$TMPDIR/SalesforceCertStudy"
   python3 -m venv .venv && source .venv/bin/activate
-  pip install Flask Flask-SQLAlchemy SQLAlchemy openai python-dotenv psycopg2-binary gunicorn playwright trafilatura
+  pip install -r requirements.txt
+  ```
+- **Ingestion (Tier-1 auto-fetch) needs two more things, deliberately
+  NOT in `requirements.txt`:**
+  ```bash
+  pip install playwright trafilatura
   playwright install chromium
   ```
-  The last line downloads Playwright's actual browser binary (pip
-  alone only installs the Python package) -- needed for Tier-1
-  auto-fetch, which uses a real headless browser since Salesforce's
-  real Exam Guide URLs are JS-rendered and return near-empty content
-  to a plain HTTP GET.
+  These are local-only: ingestion currently only ever runs via the
+  local `app.py` workaround (see Locked-in decisions), and a real
+  headless-browser dependency can't build/run on a standard Heroku
+  dyno anyway (no prebuilt `greenlet` wheel on Heroku's build image,
+  and no Chromium binary available without a dedicated buildpack --
+  see HISTORY.md). Putting them in `requirements.txt` breaks the
+  Heroku build; keep them as a separate local install step.
 - **Real internal-gateway calls need**, exported in the same terminal
   session: `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_BASE_URL` (no `/bedrock`
   suffix), `SALESFORCE_CA_BUNDLE=./salesforce-ca-bundle.pem` (re-export
