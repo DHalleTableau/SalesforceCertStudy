@@ -14,11 +14,13 @@ route wiring these together is in app.py (sub-step 2d). fetch_resource_text
 """
 import csv
 import io
-from html.parser import HTMLParser
 
-# requests is imported lazily inside fetch_resource_text(), not here,
-# so the pure parse_* functions above stay testable with plain system
-# python3 -- no venv/pip needed (see PLAN.md's Local Environment Notes).
+# playwright/trafilatura are imported lazily inside the fetch
+# functions, not here, so the pure parse_* functions above stay
+# testable with plain system python3 -- no venv/pip needed (see
+# PLAN.md's Local Environment Notes).
+
+_MIN_FETCHED_TEXT_LEN = 200
 
 
 def _normalize_header(name):
@@ -201,101 +203,136 @@ def save_prerequisites(parsed_edges):
     return skipped
 
 
-class _VisibleTextExtractor(HTMLParser):
-    """Collects text nodes outside <script>/<style>/<noscript>."""
+def _extract_page_text(page, url, timeout):
+    """Navigate an already-open Playwright page to url and extract its
+    main content with trafilatura. Returns (status, text) in the same
+    contract as fetch_resource_text/fetch_pending_resources.
 
-    _SKIP_TAGS = {"script", "style", "noscript"}
-
-    def __init__(self):
-        super().__init__()
-        self._skip_depth = 0
-        self.chunks = []
-
-    def handle_starttag(self, tag, attrs):
-        if tag in self._SKIP_TAGS:
-            self._skip_depth += 1
-
-    def handle_endtag(self, tag):
-        if tag in self._SKIP_TAGS and self._skip_depth > 0:
-            self._skip_depth -= 1
-
-    def handle_data(self, data):
-        if self._skip_depth == 0:
-            stripped = data.strip()
-            if stripped:
-                self.chunks.append(stripped)
-
-
-def _extract_visible_text(html_text):
-    extractor = _VisibleTextExtractor()
-    extractor.feed(html_text)
-    return "\n".join(extractor.chunks)
-
-
-def fetch_resource_text(url, timeout=10):
-    """Tier-1 auto-fetch: try to retrieve readable text from an
-    Exam_Guide_URL content page.
-
-    Returns (status, text):
-      - status "fetched", text = extracted readable text, on success.
-      - status "blocked_needs_paste", text = None, if the request
-        fails, returns a non-200, isn't HTML/plain-text, or the
-        extracted text is too short to be real content (a JS-rendered
-        shell or login wall typically renders down to almost nothing).
-
-    Only HTML/plain-text is handled -- PDFs and other content types
-    are always flagged blocked_needs_paste for now (no PDF-extraction
-    dependency yet; the user pastes those via Tier 2 instead).
+    A real browser (not requests + a tag-stripper) is required here --
+    Salesforce's real Exam Guide URLs are JS-rendered Experience Cloud
+    pages that return a near-empty loading shell to a plain HTTP GET
+    (0/86 success rate with the old requests-based approach; see
+    HISTORY.md). trafilatura.extract with favor_recall=True is a real
+    main-content extractor, not the old hand-rolled HTMLParser that
+    kept every nav/boilerplate text node too.
     """
-    import requests
+    import trafilatura
+    from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 
     try:
-        response = requests.get(
-            url,
-            timeout=timeout,
-            headers={
-                "User-Agent": "Mozilla/5.0 (compatible; SalesforceCertStudyBot/1.0)"
-            },
-        )
-    except requests.RequestException:
+        page.goto(url, wait_until="networkidle", timeout=timeout * 1000)
+        try:
+            page.wait_for_selector("h1, h2", timeout=timeout * 1000)
+        except PlaywrightTimeoutError:
+            pass
+        rendered_html = page.content()
+    except Exception as e:
+        print(f"  [fetch] exception loading {url}: {e!r}")
         return "blocked_needs_paste", None
 
-    if response.status_code != 200:
+    extracted = trafilatura.extract(
+        rendered_html, output_format="json", with_metadata=True, favor_recall=True,
+    )
+    if not extracted:
         return "blocked_needs_paste", None
 
-    content_type = response.headers.get("Content-Type", "")
-    if "html" not in content_type and "text/plain" not in content_type:
-        return "blocked_needs_paste", None
+    import json
 
-    text = _extract_visible_text(response.text)
-    if len(text.strip()) < 200:
+    text = (json.loads(extracted).get("text") or "").strip()
+    if len(text) < _MIN_FETCHED_TEXT_LEN:
         return "blocked_needs_paste", None
 
     return "fetched", text
 
 
-def fetch_pending_resources():
-    """Attempt Tier-1 auto-fetch for every Resource still `pending`.
+def fetch_resource_text(url, timeout=10):
+    """Tier-1 auto-fetch: try to retrieve readable text from an
+    Exam_Guide_URL content page, using a real headless browser so
+    JS-rendered pages actually render before extraction.
+
+    Returns (status, text):
+      - status "fetched", text = extracted readable text, on success.
+      - status "blocked_needs_paste", text = None, on any failure
+        (navigation error/timeout, or extracted text too short to be
+        real content -- a JS-rendered shell or login wall typically
+        renders down to almost nothing even with a real browser).
+
+    Single-URL entry point: opens and closes its own browser. Batch
+    callers should use fetch_pending_resources, which shares one
+    browser across every resource instead of relaunching per URL.
+    """
+    from playwright.sync_api import sync_playwright
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page(user_agent=(
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
+        ))
+        try:
+            return _extract_page_text(page, url, timeout)
+        finally:
+            browser.close()
+
+
+def fetch_pending_resources(timeout=10):
+    """Attempt Tier-1 auto-fetch for every Resource that either hasn't
+    been attempted yet (`pending`) or previously came back
+    `blocked_needs_paste` with no manual paste supplied since --
+    giving already-blocked resources a real second attempt with this
+    fetch method rather than leaving them permanently stuck from an
+    earlier failed attempt. Never touches a resource that already has
+    real `pasted_text`, whatever its fetch_status.
 
     Records the outcome on each row (`fetch_status`, `fetched_text`).
     Resources that come back `blocked_needs_paste` are left for the
-    user to fill in via the admin screen's per-resource paste box
-    (sub-step 2f) -- their `pasted_text` stays None until they do.
+    user to fill in via the admin screen's per-resource paste box.
+
+    Shares one browser across the whole batch (opening a new page per
+    URL, not a new browser per URL) -- for ~86 resources, relaunching
+    Chromium per URL would be needlessly slow.
 
     Must be called inside a Flask app context. Returns a
     {"fetched": n, "blocked": n} summary.
     """
+    from playwright.sync_api import sync_playwright
     from models import db, Resource
 
+    resources = Resource.query.filter(
+        db.or_(
+            Resource.fetch_status == "pending",
+            db.and_(
+                Resource.fetch_status == "blocked_needs_paste",
+                Resource.pasted_text.is_(None),
+            ),
+        )
+    ).all()
+
     counts = {"fetched": 0, "blocked": 0}
-    for resource in Resource.query.filter_by(fetch_status="pending").all():
-        status, text = fetch_resource_text(resource.url)
-        resource.fetch_status = status
-        if status == "fetched":
-            resource.fetched_text = text
-            counts["fetched"] += 1
-        else:
-            counts["blocked"] += 1
+    if not resources:
+        return counts
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        try:
+            for resource in resources:
+                page = browser.new_page(user_agent=(
+                    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
+                ))
+                try:
+                    status, text = _extract_page_text(page, resource.url, timeout)
+                finally:
+                    page.close()
+
+                resource.fetch_status = status
+                if status == "fetched":
+                    resource.fetched_text = text
+                    counts["fetched"] += 1
+                else:
+                    counts["blocked"] += 1
+        finally:
+            browser.close()
 
     db.session.commit()
     return counts

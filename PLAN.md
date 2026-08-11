@@ -21,13 +21,20 @@
   Read/Write/Edit tools need an **absolute** path — a Bash `cd` does
   not carry over to them, so `Read("PLAN.md")` right after cloning
   will fail; use the full path (e.g. from `pwd` right after cloning).
-- **Local venv setup** (`pip install -r requirements.txt` fails here
-  on `psycopg2-binary` — see HISTORY.md):
+- **Local venv setup** (`pip install -r requirements.txt` used to fail
+  here on `psycopg2-binary` trying to compile from source -- now
+  installs cleanly from a prebuilt wheel, see HISTORY.md):
   ```bash
   cd "$TMPDIR/SalesforceCertStudy"
   python3 -m venv .venv && source .venv/bin/activate
-  pip install Flask Flask-SQLAlchemy SQLAlchemy openai requests python-dotenv
+  pip install Flask Flask-SQLAlchemy SQLAlchemy openai python-dotenv psycopg2-binary gunicorn playwright trafilatura
+  playwright install chromium
   ```
+  The last line downloads Playwright's actual browser binary (pip
+  alone only installs the Python package) -- needed for Tier-1
+  auto-fetch, which uses a real headless browser since Salesforce's
+  real Exam Guide URLs are JS-rendered and return near-empty content
+  to a plain HTTP GET.
 - **Real internal-gateway calls need**, exported in the same terminal
   session: `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_BASE_URL` (no `/bedrock`
   suffix), `SALESFORCE_CA_BUNDLE=./salesforce-ca-bundle.pem` (re-export
