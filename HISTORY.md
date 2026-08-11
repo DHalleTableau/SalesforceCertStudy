@@ -414,3 +414,31 @@ build. General lesson: a dependency only ever used by a local-only
 workflow doesn't belong in the file Heroku's build reads, even if it's
 also used locally -- `requirements.txt` should reflect what `web`/
 `worker` actually need, not everything installed in the local venv.
+
+## The actual crash: psycopg2-binary==2.9.9 has no real Python 3.13 wheel
+
+`heroku logs` (not curl -- curl only ever showed generic Heroku edge
+error pages, never the app's own logs) revealed the real, single root
+cause behind both "Access Denied" and "Application Error": `web` and
+`worker` were crashing identically on
+`ImportError: .../psycopg2/_psycopg...so: undefined symbol:
+_PyInterpreterState_Get` -- a binary ABI mismatch between the pinned
+`psycopg2-binary==2.9.9` and the Python 3.13.15 runtime Heroku's
+`cnb` builder actually uses. `psycopg2-binary` only added proper
+Python 3.13 wheels starting at 2.9.10; local testing never hit this
+because the local venv had installed an unpinned, newer `2.9.12`
+(the version actually pinned in `requirements.txt` was stale and
+never got exercised locally).
+
+This means the earlier Trusted-IP-Ranges fix and the gunicorn
+`--bind` fix, while both real and worth keeping, were never actually
+the last blocker on their own -- the dyno couldn't even boot at all
+underneath either of them. Fixed by bumping the pin to
+`psycopg2-binary==2.9.10`.
+
+Lesson: `heroku logs` (the app's own runtime output) is a much more
+direct diagnostic than testing the public URL with `curl` -- curl can
+only ever show what Heroku's edge/router decided to return, which
+looks identical whether the real cause is a network/access issue or
+the dyno never booting at all. Check `heroku logs` early next time
+something is unreachable, not just the HTTP response.
