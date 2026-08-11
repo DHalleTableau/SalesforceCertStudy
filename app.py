@@ -197,10 +197,11 @@ def create_app():
         study_session = StudySession.query.get_or_404(session_id)
         filter_value = request.args.get("filter", "both")
         answers = _get_review_answers(session_id, filter_value)
+        rows = [_build_review_row(answer) for answer in answers]
         return render_template(
             "review.html",
             session=study_session,
-            answers=answers,
+            rows=rows,
             filter_value=filter_value,
         )
 
@@ -214,17 +215,18 @@ def create_app():
         buffer = io.StringIO()
         writer = csv.writer(buffer)
         writer.writerow(
-            ["Question", "Your Answer", "Correct Answer", "Domain", "Correct?", "Answered At"]
+            ["Question", "Your Answer", "Correct Answer", "Domain", "Correct?", "Explanation"]
         )
         for answer in answers:
+            row = _build_review_row(answer)
             writer.writerow(
                 [
-                    answer.question.stem,
-                    ", ".join(answer.user_answer_json),
-                    ", ".join(answer.question.correct_json),
-                    answer.question.domain or "",
-                    "Yes" if answer.is_correct else "No",
-                    answer.answered_at,
+                    row["stem"],
+                    row["your_answer"],
+                    row["correct_answer"],
+                    row["domain"],
+                    "Yes" if row["is_correct"] else "No",
+                    row["feedback_md"],
                 ]
             )
 
@@ -250,6 +252,33 @@ def _get_review_answers(session_id, filter_value):
     elif filter_value == "wrong":
         query = query.filter_by(is_correct=False)
     return query.order_by(Answer.answered_at.desc()).all()
+
+
+def _option_texts(question, keys):
+    """Map option keys (e.g. ["A", "C"]) to their answer text, for a
+    given QuestionQueueItem -- review/export show the actual answer
+    text, not just the letter, so they're usable as a study guide on
+    their own without the original question session.
+    """
+    lookup = {opt["key"]: opt["text"] for opt in question.options_json}
+    return [lookup.get(key, key) for key in keys]
+
+
+def _build_review_row(answer):
+    """Shared view-model for one review row: resolves option keys to
+    their text and pulls in the full explanation, so both the review
+    screen and CSV export show the same usable-as-a-study-guide detail
+    rather than just letters and a right/wrong flag.
+    """
+    question = answer.question
+    return {
+        "stem": question.stem,
+        "your_answer": ", ".join(_option_texts(question, answer.user_answer_json)),
+        "correct_answer": ", ".join(_option_texts(question, question.correct_json)),
+        "domain": question.domain or "",
+        "is_correct": answer.is_correct,
+        "feedback_md": question.feedback_md,
+    }
 
 
 def _serve_next_ready_question(session_id):

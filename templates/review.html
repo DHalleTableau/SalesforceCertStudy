@@ -24,6 +24,14 @@
 
   <p><a href="{{ url_for('session_export_csv', session_id=session.id, filter=filter_value) }}">Download CSV ({{ filter_value }})</a></p>
 
+  <p>
+    {% if session.status == 'active' %}
+    <a href="{{ url_for('session_question', session_id=session.id) }}">Continue this session &rarr;</a>
+    &nbsp;|&nbsp;
+    {% endif %}
+    <a href="{{ url_for('session_setup') }}">Start a new session &rarr;</a>
+  </p>
+
   <table>
     <tr>
       <th>Question</th>
@@ -31,18 +39,18 @@
       <th>Correct Answer</th>
       <th>Domain</th>
       <th>Result</th>
-      <th>Answered</th>
+      <th>Explanation</th>
     </tr>
-    {% for answer in answers %}
+    {% for row in rows %}
     <tr>
-      <td>{{ answer.question.stem }}</td>
-      <td>{{ answer.user_answer_json | join(', ') }}</td>
-      <td>{{ answer.question.correct_json | join(', ') }}</td>
-      <td>{{ answer.question.domain or '' }}</td>
-      <td class="{{ 'correct' if answer.is_correct else 'incorrect' }}">
-        {{ 'Correct' if answer.is_correct else 'Incorrect' }}
+      <td>{{ row.stem }}</td>
+      <td>{{ row.your_answer }}</td>
+      <td>{{ row.correct_answer }}</td>
+      <td>{{ row.domain }}</td>
+      <td class="{{ 'correct' if row.is_correct else 'incorrect' }}">
+        {{ 'Correct' if row.is_correct else 'Incorrect' }}
       </td>
-      <td>{{ answer.answered_at }}</td>
+      <td>{{ row.feedback_md }}</td>
     </tr>
     {% endfor %}
   </table>
