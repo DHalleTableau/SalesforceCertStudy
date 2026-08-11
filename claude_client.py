@@ -206,7 +206,8 @@ def _generate_question_tool(format):
 
 
 def generate_question(
-    cert_name, domain, difficulty, format, grounding_text, avoid_stems=None
+    cert_name, domain, difficulty, format, grounding_text, avoid_stems=None,
+    style="terminology",
 ):
     """Generate one practice question + full-detail feedback via the model.
 
@@ -224,6 +225,11 @@ def generate_question(
         session (any status), so repeated calls with identical
         grounding_text don't converge on the same "most obvious"
         question every time.
+      style: "terminology" (define/identify a term or concept -- the
+        default) or "scenario" (a realistic work situation the user
+        must decide how to handle/fix, not a definition-recall
+        question). worker.py rotates between the two so neither
+        crowds out the other.
 
     Returns a dict with keys: stem, options (list of {key, text}),
     correct (list of option keys), feedback_md, plus the format,
@@ -250,6 +256,18 @@ def generate_question(
         else "Choose an appropriate domain from the grounding content below."
     )
 
+    style_instruction = (
+        "Write this as a REALISTIC WORK SCENARIO question: describe a "
+        "specific situation, request, or problem someone in this role "
+        "would face, then ask what the correct action/approach is. Do "
+        "NOT write a plain definition-recall question -- the user "
+        "should have to apply the concept to the scenario, not just "
+        "identify a term."
+        if style == "scenario"
+        else "Emphasize terminology precision -- the user has "
+        "identified terminology as their weakest area."
+    )
+
     avoid_instruction = ""
     if avoid_stems:
         stem_list = "\n".join(f"- {s}" for s in avoid_stems)
@@ -263,7 +281,7 @@ Already asked in this session -- cover a DIFFERENT aspect, term, or scenario, no
 {format_instruction}
 {domain_instruction}
 Difficulty: {difficulty}/5 (1 = foundational recall, 5 = nuanced/scenario-based).
-Emphasize terminology precision -- the user has identified terminology as their weakest area.
+{style_instruction}
 {avoid_instruction}
 Ground the question in this exam content (do not invent facts outside it):
 ---

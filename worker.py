@@ -7,6 +7,7 @@ insert it. Idle when every active session's queues are full, or no
 session is active. This is the only process that calls the model --
 app.py never does.
 """
+import re
 import time
 from datetime import datetime, timezone
 
@@ -62,6 +63,15 @@ def _next_format(ready_count):
     return "multi" if ready_count % 3 == 2 else "single"
 
 
+def _next_style(ready_count):
+    """Simple mix: every 3rd generated question is scenario-based
+    ("how would you handle/fix this...") rather than terminology-
+    focused recall -- offset from _next_format's cadence (mod 3 == 1,
+    not == 2) so the two rotations don't always land on the same slot.
+    """
+    return "scenario" if ready_count % 3 == 1 else "terminology"
+
+
 def _next_domain(cert):
     """Round-robin through cert.domains_json instead of leaving domain
     choice open -- left as None, the model kept defaulting to whatever
@@ -89,6 +99,20 @@ MAX_GENERATION_ATTEMPTS = 5
 
 
 MIN_FEEDBACK_LENGTH = 100
+
+MIN_SENTENCE_LENGTH_FOR_DUPLICATE_CHECK = 15
+
+
+def _has_duplicate_sentence(text):
+    """True if any non-trivial sentence appears more than once verbatim
+    -- a real repetition artifact seen in model output (e.g. a stem's
+    closing question restated as a trailing paragraph). Short
+    sentences are excluded since those can coincidentally repeat
+    without it being a real artifact.
+    """
+    sentences = [s.strip() for s in re.split(r"(?<=[.?!])\s+", text) if s.strip()]
+    significant = [s for s in sentences if len(s) >= MIN_SENTENCE_LENGTH_FOR_DUPLICATE_CHECK]
+    return len(significant) != len(set(significant))
 
 
 def _is_valid_question(question, format):
@@ -119,6 +143,9 @@ def _is_valid_question(question, format):
     if feedback_len < MIN_FEEDBACK_LENGTH:
         return False, f"feedback_md too short after cleanup: {feedback_len} chars"
 
+    if _has_duplicate_sentence(question.get("stem", "")):
+        return False, "stem contains a duplicated sentence"
+
     return True, ""
 
 
@@ -142,6 +169,7 @@ def top_up_session(session):
 
             difficulty = _next_difficulty(session.id, cert_code)
             format = _next_format(ready_count)
+            style = _next_style(ready_count)
 
             # Cross-session, not just this session's: nothing stopped a
             # brand-new session from repeating a question asked in an
@@ -164,6 +192,7 @@ def top_up_session(session):
                     domain=domain,
                     difficulty=difficulty,
                     format=format,
+                    style=style,
                     grounding_text=grounding,
                     avoid_stems=avoid_stems,
                 )
@@ -196,7 +225,7 @@ def top_up_session(session):
             db.session.commit()
             ready_count += 1
             print(
-                f"  generated {cert_code} [{format}] domain={domain} "
+                f"  generated {cert_code} [{format}/{style}] domain={domain} "
                 f"ready={ready_count}/{READY_THRESHOLD}"
             )
 
