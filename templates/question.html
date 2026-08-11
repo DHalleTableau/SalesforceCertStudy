@@ -40,6 +40,10 @@
     {% endfor %}
     <button type="submit">Submit Answer</button>
   </form>
+
+  <form method="post" action="{{ url_for('session_end', session_id=session.id) }}">
+    <button type="submit">End Session &amp; Review Results</button>
+  </form>
   {% else %}
   <p class="waiting">
     Generating your first question -- this can take up to 30 seconds.

@@ -142,10 +142,20 @@ def create_app():
     @login_required
     def session_question(session_id):
         study_session = StudySession.query.get_or_404(session_id)
+        if study_session.status != "active":
+            return redirect(url_for("session_review", session_id=session_id))
         question = _serve_next_ready_question(session_id)
         return render_template(
             "question.html", session=study_session, question=question, feedback=None
         )
+
+    @app.route("/session/<session_id>/end", methods=["POST"])
+    @login_required
+    def session_end(session_id):
+        study_session = StudySession.query.get_or_404(session_id)
+        study_session.status = "ended"
+        db.session.commit()
+        return redirect(url_for("session_review", session_id=session_id))
 
     @app.route("/session/<session_id>/answer", methods=["POST"])
     @login_required
