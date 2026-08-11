@@ -338,3 +338,30 @@ was caught) still show up as `status="active"` forever -- nothing in
 this app ever marks a session `ended`. Harmless so far (worker.py
 just loops over them doing nothing since `cert_codes` is empty), but
 worth cleaning up or adding session-ending logic eventually.
+
+## `$TMPDIR` wiped mid-session, and I couldn't re-create it myself
+
+During the question-variability work, the entire checkout vanished
+mid-edit (not a reboot the user triggered knowingly -- just discovered
+when a routine file edit suddenly returned "File does not exist").
+Nothing was lost: everything through the last `git push` was safe on
+GitHub, and the one not-yet-committed feature (style rotation) was
+still visible in the assistant's own conversation context and got
+reapplied verbatim once the repo was back.
+
+New wrinkle vs. the previously-documented version of this problem: the
+assistant's own sandbox could NOT recreate `$TMPDIR/SalesforceCertStudy`
+itself this time -- `git clone` and even a plain `mkdir` both failed
+with "Operation not permitted." The sandbox's write allowlist is
+scoped to the exact path `$TMPDIR/SalesforceCertStudy`, which only
+works while that path already exists; creating it fresh needs write
+permission on its *parent* (`$TMPDIR` itself), which the assistant
+does not have. Only the user's own terminal (unrestricted by this
+sandbox) could run the clone command to recreate it. Once it existed
+on disk again, the assistant's tools could read/write into it exactly
+as before.
+
+Lesson: if `$TMPDIR/SalesforceCertStudy` is ever gone, the assistant
+cannot self-heal by re-cloning -- always hand the exact `mkdir -p
+$TMPDIR && cd $TMPDIR && git clone ...` command to the user to run in
+their own terminal first.
