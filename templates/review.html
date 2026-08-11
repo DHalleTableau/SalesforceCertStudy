@@ -9,20 +9,12 @@
     th, td { border-bottom: 1px solid #ddd; padding: 0.5rem; text-align: left; vertical-align: top; }
     .correct { color: #1a7a3a; }
     .incorrect { color: #b00020; }
-    .filters a { margin-right: 1rem; }
-    .filters a.active { font-weight: bold; text-decoration: underline; }
   </style>
 </head>
 <body>
   <h1>Review</h1>
 
-  <p class="filters">
-    <a href="{{ url_for('session_review', session_id=session.id, filter='both') }}" class="{{ 'active' if filter_value == 'both' }}">Both</a>
-    <a href="{{ url_for('session_review', session_id=session.id, filter='right') }}" class="{{ 'active' if filter_value == 'right' }}">Right</a>
-    <a href="{{ url_for('session_review', session_id=session.id, filter='wrong') }}" class="{{ 'active' if filter_value == 'wrong' }}">Wrong</a>
-  </p>
-
-  <p><a href="{{ url_for('session_export_csv', session_id=session.id, filter=filter_value) }}">Download CSV ({{ filter_value }})</a></p>
+  <p><a href="{{ url_for('session_export_csv', session_id=session.id) }}">Download CSV</a></p>
 
   <p>
     {% if session.status == 'active' %}
