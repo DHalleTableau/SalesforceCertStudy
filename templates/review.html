@@ -35,6 +35,7 @@
   <table>
     <tr>
       <th>Question</th>
+      <th>Certification</th>
       <th>Your Answer</th>
       <th>Correct Answer</th>
       <th>Domain</th>
@@ -44,6 +45,7 @@
     {% for row in rows %}
     <tr>
       <td>{{ row.stem }}</td>
+      <td>{{ row.cert_code }}</td>
       <td>{{ row.your_answer }}</td>
       <td>{{ row.correct_answer }}</td>
       <td>{{ row.domain }}</td>

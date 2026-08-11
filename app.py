@@ -208,20 +208,29 @@ def create_app():
     @app.route("/session/<session_id>/export.csv")
     @login_required
     def session_export_csv(session_id):
-        StudySession.query.get_or_404(session_id)
+        study_session = StudySession.query.get_or_404(session_id)
         filter_value = request.args.get("filter", "both")
         answers = _get_review_answers(session_id, filter_value)
 
         buffer = io.StringIO()
         writer = csv.writer(buffer)
         writer.writerow(
-            ["Question", "Your Answer", "Correct Answer", "Domain", "Correct?", "Explanation"]
+            [
+                "Question",
+                "Certification",
+                "Your Answer",
+                "Correct Answer",
+                "Domain",
+                "Correct?",
+                "Explanation",
+            ]
         )
         for answer in answers:
             row = _build_review_row(answer)
             writer.writerow(
                 [
                     row["stem"],
+                    row["cert_code"],
                     row["your_answer"],
                     row["correct_answer"],
                     row["domain"],
@@ -230,11 +239,26 @@ def create_app():
                 ]
             )
 
+        first_question = (
+            QuestionQueueItem.query.filter_by(session_id=session_id)
+            .order_by(QuestionQueueItem.created_at.asc())
+            .first()
+        )
+        # "Session start" for naming purposes is when questions actually
+        # started generating, not StudySession.started_at (set at
+        # creation, before anything's been generated yet) -- falls back
+        # to started_at for the edge case of exporting before any
+        # question has ever been generated.
+        start_time = (
+            first_question.created_at if first_question else study_session.started_at
+        )
+        filename = f"SalesforceCertStudy-{start_time.strftime('%Y%m%d-%H%M')}.csv"
+
         return Response(
             buffer.getvalue(),
             mimetype="text/csv",
             headers={
-                "Content-Disposition": f'attachment; filename="review_{session_id}_{filter_value}.csv"'
+                "Content-Disposition": f'attachment; filename="{filename}"'
             },
         )
 
@@ -255,13 +279,13 @@ def _get_review_answers(session_id, filter_value):
 
 
 def _option_texts(question, keys):
-    """Map option keys (e.g. ["A", "C"]) to their answer text, for a
-    given QuestionQueueItem -- review/export show the actual answer
-    text, not just the letter, so they're usable as a study guide on
-    their own without the original question session.
+    """Map option keys (e.g. ["A", "C"]) to "<key>. <text>" (e.g.
+    "A. Chunking"), for a given QuestionQueueItem -- review/export
+    keep the letter alongside the text so it's easy to cross-reference
+    against the explanation column, which refers to options by letter.
     """
     lookup = {opt["key"]: opt["text"] for opt in question.options_json}
-    return [lookup.get(key, key) for key in keys]
+    return [f"{key}. {lookup.get(key, '?')}" for key in keys]
 
 
 def _build_review_row(answer):
@@ -273,6 +297,7 @@ def _build_review_row(answer):
     question = answer.question
     return {
         "stem": question.stem,
+        "cert_code": question.cert_code,
         "your_answer": ", ".join(_option_texts(question, answer.user_answer_json)),
         "correct_answer": ", ".join(_option_texts(question, question.correct_json)),
         "domain": question.domain or "",
