@@ -3,7 +3,10 @@
 <head>
   <meta charset="utf-8">
   {% if not question %}
-  <meta http-equiv="refresh" content="3">
+  <!-- Explicit url= target, not just "reload current location" -- this
+       page can be reached via a POST (answering a question) whose
+       address bar URL doesn't accept GET, which would 405 on refresh. -->
+  <meta http-equiv="refresh" content="3;url={{ url_for('session_question', session_id=session.id) }}">
   {% endif %}
   <title>Practice Question</title>
   <style>
