@@ -13,6 +13,7 @@
     .incorrect { background: #fce8e6; }
     label { display: block; margin: 0.3rem 0; }
     .waiting { color: #888; font-style: italic; }
+    .offline { background: #fff3e0; padding: 1rem; border-radius: 4px; margin-top: 1rem; }
   </style>
 </head>
 <body>
@@ -46,11 +47,19 @@
   </form>
   {% else %}
   <p class="waiting">
-    Generating your first question -- this can take up to 30 seconds.
+    Generating your next question -- this can take up to 30 seconds.
     This page will refresh automatically; no need to reload it
     yourself. (If it doesn't,
     <a href="{{ url_for('session_question', session_id=session.id) }}">refresh manually</a>.)
   </p>
+  {% if long_wait %}
+  <p class="offline">
+    This is taking much longer than usual, which usually means the
+    practice engine that generates new questions is offline right
+    now. Nothing's wrong on your end -- check back later, or reach out
+    to whoever administers this tool.
+  </p>
+  {% endif %}
   {% endif %}
 </body>
 </html>

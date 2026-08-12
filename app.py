@@ -9,6 +9,7 @@ import csv
 import io
 import json
 import os
+from datetime import timedelta
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from dotenv import load_dotenv
@@ -147,7 +148,11 @@ def create_app():
             return redirect(url_for("session_review", session_id=session_id))
         question = _serve_next_ready_question(session_id)
         return render_template(
-            "question.html", session=study_session, question=question, feedback=None
+            "question.html",
+            session=study_session,
+            question=question,
+            feedback=None,
+            long_wait=_is_long_wait(study_session, question),
         )
 
     @app.route("/session/<session_id>/end", methods=["POST"])
@@ -190,6 +195,7 @@ def create_app():
             session=study_session,
             question=next_question,
             feedback=feedback,
+            long_wait=_is_long_wait(study_session, next_question),
         )
 
     @app.route("/session/<session_id>/review")
@@ -276,6 +282,18 @@ def create_app():
         )
 
     return app
+
+
+def _is_long_wait(study_session, question):
+    """True if there's still no ready question after a while -- almost
+    always means the worker isn't running, not that generation is just
+    slow. The "up to 30s" first-question estimate shown to the user
+    assumes a live worker; surface that assumption failing instead of
+    an endless silent auto-refresh with no explanation.
+    """
+    return question is None and utcnow() - study_session.started_at > timedelta(
+        minutes=2
+    )
 
 
 def _get_review_answers(session_id, filter_value):
