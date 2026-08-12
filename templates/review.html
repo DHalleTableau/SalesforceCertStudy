@@ -14,7 +14,13 @@
 <body>
   <h1>Review</h1>
 
-  <p><a href="{{ url_for('session_export_csv', session_id=session.id) }}">Download CSV</a></p>
+  <p><a id="csv-download" href="{{ url_for('session_export_csv', session_id=session.id) }}">Download CSV</a></p>
+  <script>
+    // Append the browser's own timezone so the exported filename
+    // reflects when the user actually started, not the server's UTC.
+    document.getElementById("csv-download").href +=
+      "?tz=" + encodeURIComponent(Intl.DateTimeFormat().resolvedOptions().timeZone);
+  </script>
 
   <p>
     {% if session.status == 'active' %}

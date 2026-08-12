@@ -9,6 +9,7 @@ import csv
 import io
 import json
 import os
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from dotenv import load_dotenv
 
@@ -252,6 +253,18 @@ def create_app():
         start_time = (
             first_question.created_at if first_question else study_session.started_at
         )
+        # Stored timestamps are UTC (see models.utcnow) -- convert to
+        # the browser's own timezone (passed via ?tz=, detected client
+        # side in review.html) so the filename reflects when the user
+        # actually started, not a fixed server timezone. Falls back to
+        # UTC if the param is missing (e.g. JS disabled) or not a real
+        # IANA zone name.
+        tz_name = request.args.get("tz")
+        if tz_name:
+            try:
+                start_time = start_time.astimezone(ZoneInfo(tz_name))
+            except (ZoneInfoNotFoundError, ValueError):
+                pass
         filename = f"SalesforceCertStudy-{start_time.strftime('%Y%m%d-%H%M')}.csv"
 
         return Response(
