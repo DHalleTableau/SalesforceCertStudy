@@ -169,6 +169,37 @@ class QuestionQueueItem(db.Model):
         return f"<QuestionQueueItem {self.cert_code} {self.status}>"
 
 
+class Contribution(db.Model):
+    """A regular user's suggested study material for a cert -- a URL
+    or an uploaded file, plus an optional note. Submitted via
+    /contribute, reviewed only by an admin via /admin/contributions.
+    Submitting here never touches Resource/grounding content directly
+    -- the admin still imports it manually (paste flow in
+    /admin/ingest) after reviewing, same as any other source.
+
+    file_content stores the uploaded file's raw bytes directly in
+    Postgres (no new infrastructure) -- fine for occasional small/
+    medium study-guide uploads; capped at request level by Flask's
+    MAX_CONTENT_LENGTH, not enforced here.
+    """
+
+    __tablename__ = "contributions"
+
+    id = db.Column(db.String, primary_key=True, default=_uuid)
+    cert_code = db.Column(db.String, nullable=False, index=True)
+    contributor_name = db.Column(db.String, nullable=True)
+    url = db.Column(db.String, nullable=True)
+    file_name = db.Column(db.String, nullable=True)
+    file_content = db.Column(db.LargeBinary, nullable=True)
+    note = db.Column(db.Text, nullable=True)
+    status = db.Column(db.String, nullable=False, default="pending", index=True)
+    # "pending" | "reviewed"
+    submitted_at = db.Column(db.DateTime(timezone=True), default=utcnow)
+
+    def __repr__(self):
+        return f"<Contribution {self.cert_code} {self.status}>"
+
+
 class Answer(db.Model):
     """A recorded response to one served question. Source for review + CSV export."""
 

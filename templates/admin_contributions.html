@@ -1,0 +1,42 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Contribution Review Queue</title>
+  <style>
+    body { font-family: sans-serif; max-width: 900px; margin: 2rem auto; }
+    .contribution { border: 1px solid #ddd; border-radius: 4px; padding: 1rem; margin-bottom: 1rem; }
+    .contribution h3 { margin-top: 0; }
+    .meta { color: #666; font-size: 0.9rem; }
+  </style>
+</head>
+<body>
+  <h1>Contribution Review Queue</h1>
+  <p><a href="{{ url_for('admin_ingest') }}">&larr; Back to ingest</a></p>
+
+  {% if not contributions %}
+  <p>No pending contributions.</p>
+  {% endif %}
+
+  {% for c in contributions %}
+  <div class="contribution">
+    <h3>{{ c.cert_code }}</h3>
+    <p class="meta">
+      Submitted {{ c.submitted_at }}{% if c.contributor_name %} by {{ c.contributor_name }}{% endif %}
+    </p>
+    {% if c.url %}
+    <p><a href="{{ c.url }}" target="_blank">{{ c.url }}</a></p>
+    {% endif %}
+    {% if c.file_name %}
+    <p><a href="{{ url_for('admin_contribution_file', contribution_id=c.id) }}">Download {{ c.file_name }}</a></p>
+    {% endif %}
+    {% if c.note %}
+    <p>{{ c.note }}</p>
+    {% endif %}
+    <form method="post" action="{{ url_for('admin_mark_contribution_reviewed', contribution_id=c.id) }}">
+      <button type="submit">Mark Reviewed</button>
+    </form>
+  </div>
+  {% endfor %}
+</body>
+</html>

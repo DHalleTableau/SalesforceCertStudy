@@ -18,7 +18,7 @@ load_dotenv()
 
 from flask import Flask, Response, jsonify, redirect, render_template, request, url_for
 
-from auth import login_required, register_auth_routes
+from auth import admin_required, login_required, register_auth_routes
 from cert_resolution import resolve_certs
 from ingest import (
     fetch_pending_resources,
@@ -27,7 +27,18 @@ from ingest import (
     save_exam_guides,
     save_prerequisites,
 )
-from models import Answer, Cert, QuestionQueueItem, StudySession, db, Resource, utcnow
+from models import (
+    Answer,
+    Cert,
+    Contribution,
+    QuestionQueueItem,
+    StudySession,
+    db,
+    Resource,
+    utcnow,
+)
+
+MAX_CONTRIBUTION_UPLOAD_BYTES = 10 * 1024 * 1024
 
 
 def create_app():
@@ -37,6 +48,12 @@ def create_app():
     app.config["SECRET_KEY"] = os.environ.get(
         "FLASK_SECRET_KEY", "dev-only-not-secure"
     )
+    # Caps every request body, not just contribution uploads -- fine,
+    # nothing else in this app accepts large payloads. Prevents an
+    # oversized upload from bloating the database or crashing the
+    # request; Flask returns a clean 413 rather than reading it all
+    # into memory first.
+    app.config["MAX_CONTENT_LENGTH"] = MAX_CONTRIBUTION_UPLOAD_BYTES
 
     db.init_app(app)
 
@@ -50,7 +67,7 @@ def create_app():
         return jsonify(status="ok")
 
     @app.route("/admin/ingest", methods=["GET", "POST"])
-    @login_required
+    @admin_required
     def admin_ingest():
         summary = None
         if request.method == "POST":
@@ -86,7 +103,7 @@ def create_app():
         )
 
     @app.route("/admin/ingest/paste-resource", methods=["POST"])
-    @login_required
+    @admin_required
     def admin_paste_resource():
         resource_id = request.form.get("resource_id")
         pasted_text = request.form.get("pasted_text", "").strip()
@@ -95,6 +112,66 @@ def create_app():
             resource.pasted_text = pasted_text
             db.session.commit()
         return redirect(url_for("admin_ingest"))
+
+    @app.route("/admin/contributions")
+    @admin_required
+    def admin_contributions():
+        pending = (
+            Contribution.query.filter_by(status="pending")
+            .order_by(Contribution.submitted_at.desc())
+            .all()
+        )
+        return render_template("admin_contributions.html", contributions=pending)
+
+    @app.route("/admin/contributions/<contribution_id>/mark-reviewed", methods=["POST"])
+    @admin_required
+    def admin_mark_contribution_reviewed(contribution_id):
+        contribution = Contribution.query.get_or_404(contribution_id)
+        contribution.status = "reviewed"
+        db.session.commit()
+        return redirect(url_for("admin_contributions"))
+
+    @app.route("/admin/contributions/<contribution_id>/file")
+    @admin_required
+    def admin_contribution_file(contribution_id):
+        contribution = Contribution.query.get_or_404(contribution_id)
+        if not contribution.file_content:
+            return "No file on this contribution", 404
+        return Response(
+            contribution.file_content,
+            mimetype="application/octet-stream",
+            headers={
+                "Content-Disposition": f'attachment; filename="{contribution.file_name or "contribution"}"'
+            },
+        )
+
+    @app.route("/contribute", methods=["GET", "POST"])
+    @login_required
+    def contribute():
+        submitted = False
+        if request.method == "POST":
+            uploaded_file = request.files.get("file")
+            file_name = None
+            file_content = None
+            if uploaded_file and uploaded_file.filename:
+                file_name = uploaded_file.filename
+                file_content = uploaded_file.read()
+
+            db.session.add(
+                Contribution(
+                    cert_code=request.form.get("cert_code", ""),
+                    contributor_name=request.form.get("contributor_name", "").strip() or None,
+                    url=request.form.get("url", "").strip() or None,
+                    file_name=file_name,
+                    file_content=file_content,
+                    note=request.form.get("note", "").strip() or None,
+                )
+            )
+            db.session.commit()
+            submitted = True
+
+        certs = Cert.query.order_by(Cert.name).all()
+        return render_template("contribute.html", certs=certs, submitted=submitted)
 
     @app.route("/session/setup", methods=["GET", "POST"])
     @login_required
