@@ -28,7 +28,10 @@
   </form>
 
   {% else %}
-  <form method="post">
+  {% if error %}
+  <p style="color: #b00020;">{{ error }}</p>
+  {% endif %}
+  <form method="post" onsubmit="return document.querySelectorAll('input[name=cert_codes]:checked').length > 0 || alert('Select at least one certification first.');">
     {% for cert in certs %}
     <label>
       <input type="checkbox" name="cert_codes" value="{{ cert.cert_code }}">

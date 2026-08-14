@@ -181,6 +181,15 @@ def create_app():
             return render_template("session_setup.html", certs=certs, prompt=None)
 
         selected_cert_codes = request.form.getlist("cert_codes")
+        if not selected_cert_codes:
+            certs = Cert.query.order_by(Cert.name).all()
+            return render_template(
+                "session_setup.html",
+                certs=certs,
+                prompt=None,
+                error="Select at least one certification first.",
+            )
+
         answered_prompts = json.loads(request.form.get("answered_json", "{}"))
 
         prompt_cert_code = request.form.get("prompt_cert_code")
