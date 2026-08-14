@@ -1,11 +1,22 @@
 """Background top-up worker for the Salesforce Cert Study tool.
 
-On-demand top-up (see PLAN.md's Locked-in decisions): while a session
-is active and a cert's `question_queue` has fewer than READY_THRESHOLD
-`ready` rows, generate the next question via claude_client.py and
-insert it. Idle when every active session's queues are full, or no
-session is active. This is the only process that calls the model --
-app.py never does.
+On-demand top-up (see PLAN.md's Locked-in decisions), scoped per cert
+rather than per session: while any session is active, keep a shared
+pool of POOL_SIZE ready, *unclaimed* questions (session_id IS NULL)
+for each cert some active session actually needs, generating one
+replacement at a time via claude_client.py as the pool runs low.
+Idle when every needed cert's pool is full, or no session is active.
+This is the only process that calls the model -- app.py never does.
+
+Per-cert (not per-session) generation is a deliberate fix for two
+problems seen in practice: an abandoned/mistaken session used to soak
+up a full batch-of-5 generation run that a real, waiting user was
+stuck behind (observed ~10 minute delays); and there was no way to
+"cancel" a session's in-flight generation when it ended or backed out,
+because generation was tied to the session in the first place. Under
+this model there's nothing to cancel -- a session backing out just
+means its cert stops appearing in the "still needed" set on the very
+next poll cycle.
 """
 import re
 import time
@@ -13,9 +24,9 @@ from datetime import datetime, timezone
 
 from app import app
 from claude_client import assemble_grounding_text, derive_cert_overview, generate_question
-from models import Answer, Cert, QuestionQueueItem, StudySession, db
+from models import Cert, QuestionQueueItem, StudySession, db
 
-READY_THRESHOLD = 5
+POOL_SIZE = 5
 POLL_INTERVAL_SECONDS = 5
 
 
@@ -42,37 +53,42 @@ def ensure_cert_overview(cert_code):
     db.session.commit()
 
 
-def _next_difficulty(session_id, cert_code):
-    """Ramp difficulty with how many questions the user has already
-    answered for this cert in this session: 1 for the first 3, 2 for
-    the next 3, etc., capped at 5.
+def _cert_total_generated(cert_code):
+    """Total QuestionQueueItem rows ever generated for this cert,
+    claimed or not -- the shared rotation basis for difficulty/format/
+    style/domain, all keyed the same way so a cert's pool gets a
+    consistent, varied mix regardless of which sessions end up
+    claiming which rows.
     """
-    answered_count = (
-        Answer.query.join(QuestionQueueItem)
-        .filter(
-            QuestionQueueItem.session_id == session_id,
-            QuestionQueueItem.cert_code == cert_code,
-        )
-        .count()
-    )
-    return min(5, 1 + answered_count // 3)
+    return QuestionQueueItem.query.filter_by(cert_code=cert_code).count()
 
 
-def _next_format(ready_count):
+def _next_pool_difficulty(total_generated):
+    """Mixed pool, no ramp: cycles 1-5. Personalized per-session
+    difficulty ramping doesn't apply once generation happens ahead of
+    any specific session's progress -- deferred until there's a real
+    per-user mechanism to target. Kept as its own function (not
+    inlined) so that mechanism can replace just this rule later
+    without touching the schema or the rest of generation.
+    """
+    return (total_generated % 5) + 1
+
+
+def _next_format(total_generated):
     """Simple mix: every 3rd generated question is multi-select."""
-    return "multi" if ready_count % 3 == 2 else "single"
+    return "multi" if total_generated % 3 == 2 else "single"
 
 
-def _next_style(ready_count):
+def _next_style(total_generated):
     """Simple mix: every 3rd generated question is scenario-based
     ("how would you handle/fix this...") rather than terminology-
     focused recall -- offset from _next_format's cadence (mod 3 == 1,
     not == 2) so the two rotations don't always land on the same slot.
     """
-    return "scenario" if ready_count % 3 == 1 else "terminology"
+    return "scenario" if total_generated % 3 == 1 else "terminology"
 
 
-def _next_domain(cert):
+def _next_domain(cert, total_generated):
     """Round-robin through cert.domains_json instead of leaving domain
     choice open -- left as None, the model kept defaulting to whatever
     was most prominent in the grounding text, regardless of how many
@@ -88,8 +104,7 @@ def _next_domain(cert):
     domains = cert.domains_json or []
     if not domains:
         return None
-    total_count = QuestionQueueItem.query.filter_by(cert_code=cert.cert_code).count()
-    return domains[total_count % len(domains)]["name"]
+    return domains[total_generated % len(domains)]["name"]
 
 
 AVOID_STEMS_LIMIT = 40
@@ -149,85 +164,103 @@ def _is_valid_question(question, format):
     return True, ""
 
 
-def top_up_session(session):
-    """Fill each of session's certs' queues up to READY_THRESHOLD."""
-    for cert_code in session.cert_codes:
-        ensure_cert_overview(cert_code)
+def _needed_cert_codes():
+    """Every cert_code that some currently-active session cares about.
+    Recomputed fresh each poll cycle -- this is the whole mechanism
+    that lets an ended/backed-out session stop costing generation
+    time with no explicit cancellation: if no active session lists a
+    cert anymore, it simply stops appearing here next cycle.
+    """
+    needed = set()
+    for session in StudySession.query.filter_by(status="active").all():
+        needed.update(session.cert_codes)
+    return needed
 
-        cert = Cert.query.get(cert_code)
-        if cert is None:
-            continue
 
-        ready_count = QuestionQueueItem.query.filter_by(
-            session_id=session.id, cert_code=cert_code, status="ready"
-        ).count()
+def top_up_cert_pool(cert_code):
+    """Generate at most one replacement question for cert_code's
+    shared pool, if it's currently short of POOL_SIZE unclaimed ready
+    rows. One at a time, not a batch -- the next poll cycle re-checks
+    and generates another if still short, so a cert with many
+    concurrent claimants gets refilled steadily rather than in one
+    long blocking run.
+    """
+    ensure_cert_overview(cert_code)
 
-        while ready_count < READY_THRESHOLD:
-            grounding = assemble_grounding_text(cert_code)
-            if not grounding:
-                break  # nothing to generate from yet -- don't spin forever
+    cert = Cert.query.get(cert_code)
+    if cert is None:
+        return
 
-            difficulty = _next_difficulty(session.id, cert_code)
-            format = _next_format(ready_count)
-            style = _next_style(ready_count)
+    unclaimed_ready_count = QuestionQueueItem.query.filter_by(
+        cert_code=cert_code, session_id=None, status="ready"
+    ).count()
+    if unclaimed_ready_count >= POOL_SIZE:
+        return
 
-            # Cross-session, not just this session's: nothing stopped a
-            # brand-new session from repeating a question asked in an
-            # earlier one. Capped to the most recent AVOID_STEMS_LIMIT so
-            # the prompt doesn't grow unbounded over weeks of practice.
-            avoid_stems = [
-                item.stem
-                for item in QuestionQueueItem.query.filter_by(cert_code=cert_code)
-                .order_by(QuestionQueueItem.created_at.desc())
-                .limit(AVOID_STEMS_LIMIT)
-                .all()
-            ]
+    grounding = assemble_grounding_text(cert_code)
+    if not grounding:
+        return  # nothing to generate from yet
 
-            domain = _next_domain(cert)
+    total_generated = _cert_total_generated(cert_code)
+    difficulty = _next_pool_difficulty(total_generated)
+    format = _next_format(total_generated)
+    style = _next_style(total_generated)
+    domain = _next_domain(cert, total_generated)
 
-            question = None
-            for attempt_num in range(MAX_GENERATION_ATTEMPTS):
-                candidate = generate_question(
-                    cert_name=cert.name,
-                    domain=domain,
-                    difficulty=difficulty,
-                    format=format,
-                    style=style,
-                    grounding_text=grounding,
-                    avoid_stems=avoid_stems,
-                )
-                is_valid, reason = _is_valid_question(candidate, format)
-                if is_valid:
-                    question = candidate
-                    break
-                print(f"  [attempt {attempt_num + 1}/{MAX_GENERATION_ATTEMPTS}] rejected: {reason}")
+    # Cross-session, cert-wide: nothing stopped a brand-new session
+    # from repeating a question asked in an earlier one. Capped to the
+    # most recent AVOID_STEMS_LIMIT so the prompt doesn't grow
+    # unbounded over weeks of practice.
+    avoid_stems = [
+        item.stem
+        for item in QuestionQueueItem.query.filter_by(cert_code=cert_code)
+        .order_by(QuestionQueueItem.created_at.desc())
+        .limit(AVOID_STEMS_LIMIT)
+        .all()
+    ]
 
-            if question is None:
-                # Couldn't get a well-formed question after retries --
-                # skip this slot for now rather than insert bad data;
-                # the next poll cycle will try again.
-                break
+    question = None
+    for attempt_num in range(MAX_GENERATION_ATTEMPTS):
+        candidate = generate_question(
+            cert_name=cert.name,
+            domain=domain,
+            difficulty=difficulty,
+            format=format,
+            style=style,
+            grounding_text=grounding,
+            avoid_stems=avoid_stems,
+        )
+        is_valid, reason = _is_valid_question(candidate, format)
+        if is_valid:
+            question = candidate
+            break
+        print(f"  [attempt {attempt_num + 1}/{MAX_GENERATION_ATTEMPTS}] rejected: {reason}")
 
-            db.session.add(
-                QuestionQueueItem(
-                    session_id=session.id,
-                    cert_code=cert_code,
-                    domain=question.get("domain"),
-                    difficulty=question["difficulty"],
-                    format=question["format"],
-                    stem=question["stem"],
-                    options_json=question["options"],
-                    correct_json=question["correct"],
-                    feedback_md=question["feedback_md"],
-                    status="ready",
-                )
-            )
-            db.session.commit()
-            ready_count += 1
-            print(
-                f"  generated {cert_code} [{format}/{style}] domain={domain} "
-                f"ready={ready_count}/{READY_THRESHOLD}"
-            )
+    if question is None:
+        # Couldn't get a well-formed question after retries -- skip
+        # this slot for now rather than insert bad data; the next poll
+        # cycle will try again.
+        return
+
+    db.session.add(
+        QuestionQueueItem(
+            session_id=None,
+            cert_code=cert_code,
+            domain=question.get("domain"),
+            difficulty=question["difficulty"],
+            format=question["format"],
+            stem=question["stem"],
+            options_json=question["options"],
+            correct_json=question["correct"],
+            feedback_md=question["feedback_md"],
+            status="ready",
+        )
+    )
+    db.session.commit()
+    print(
+        f"  generated {cert_code} [{format}/{style}] domain={domain} "
+        f"difficulty={difficulty} pool={unclaimed_ready_count + 1}/{POOL_SIZE}"
+    )
 
 
 def main():
@@ -235,8 +268,8 @@ def main():
         db.create_all()
         print("worker: on-demand top-up loop running")
         while True:
-            for session in StudySession.query.filter_by(status="active").all():
-                top_up_session(session)
+            for cert_code in _needed_cert_codes():
+                top_up_cert_pool(cert_code)
             time.sleep(POLL_INTERVAL_SECONDS)
 
 

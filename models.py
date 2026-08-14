@@ -141,20 +141,28 @@ class StudySession(db.Model):
 class QuestionQueueItem(db.Model):
     """One pre-generated question + its full-detail answer.
 
-    Written only by worker.py. `status` moves ready -> served -> answered
-    as the web app hands it out and records a response; web never writes
-    stem/options/feedback here.
+    Written only by worker.py. `session_id` is null until a session
+    actually claims this row (see _serve_next_ready_question in
+    app.py) -- generation is scoped per cert, not per session: a
+    shared pool of ready, unclaimed questions per cert_code, drawn
+    from by whichever session needs one next. This is what lets
+    ending/abandoning one session stop costing generation time on its
+    behalf without any explicit cancellation -- there's no
+    "this session's queue" to cancel, only "does this cert still need
+    topping up," recomputed fresh every poll cycle. `status` moves
+    ready -> served -> answered as a row gets claimed and then
+    answered; web never writes stem/options/feedback here.
     """
 
     __tablename__ = "question_queue"
 
     id = db.Column(db.String, primary_key=True, default=_uuid)
     session_id = db.Column(
-        db.String, db.ForeignKey("sessions.id"), nullable=False, index=True
+        db.String, db.ForeignKey("sessions.id"), nullable=True, index=True
     )
     cert_code = db.Column(db.String, nullable=False)
     domain = db.Column(db.String, nullable=True)
-    difficulty = db.Column(db.Integer, nullable=False, default=1)  # 1-5, ramps up
+    difficulty = db.Column(db.Integer, nullable=False, default=1)  # 1-5, mixed pool
     format = db.Column(db.String, nullable=False)  # "single" | "multi"
     stem = db.Column(db.Text, nullable=False)
     options_json = db.Column(db.JSON, nullable=False)  # [{"key": "A", "text": "..."}, ...]

@@ -232,7 +232,7 @@ def create_app():
         study_session = StudySession.query.get_or_404(session_id)
         if study_session.status != "active":
             return redirect(url_for("session_review", session_id=session_id))
-        question = _serve_next_ready_question(session_id)
+        question = _serve_next_ready_question(study_session)
         return render_template(
             "question.html",
             session=study_session,
@@ -274,7 +274,7 @@ def create_app():
             "feedback_md": question.feedback_md,
             "correct_json": question.correct_json,
         }
-        next_question = _serve_next_ready_question(session_id)
+        next_question = _serve_next_ready_question(study_session)
 
         return render_template(
             "question.html",
@@ -423,19 +423,33 @@ def _build_review_row(answer):
     }
 
 
-def _serve_next_ready_question(session_id):
-    """Instantly serve the oldest `ready` QuestionQueueItem for a
-    session, marking it `served`. No model call here -- if this
-    returns None, nothing is `ready` yet and the caller shows a
-    "waiting" state; the (separately running) worker fills the queue
-    in the background, never in this request path.
+def _serve_next_ready_question(study_session):
+    """Instantly claim the oldest unclaimed `ready` QuestionQueueItem
+    for one of study_session's certs, from the shared per-cert pool
+    (session_id IS NULL until claimed here) -- not a queue dedicated
+    to this session. No model call here -- if this returns None,
+    nothing is ready yet and the caller shows a "waiting" state; the
+    (separately running) worker fills each cert's pool in the
+    background, never in this request path.
+
+    with_for_update(skip_locked=True) makes the claim atomic: today's
+    single-sync-worker gunicorn setup can't actually race, but this
+    avoids two concurrent requests claiming the same row if that ever
+    changes (the more workers/threads, the more concurrent users this
+    is meant to support in the first place).
     """
     question = (
-        QuestionQueueItem.query.filter_by(session_id=session_id, status="ready")
+        QuestionQueueItem.query.filter(
+            QuestionQueueItem.session_id.is_(None),
+            QuestionQueueItem.status == "ready",
+            QuestionQueueItem.cert_code.in_(study_session.cert_codes),
+        )
         .order_by(QuestionQueueItem.created_at)
+        .with_for_update(skip_locked=True)
         .first()
     )
     if question is not None:
+        question.session_id = study_session.id
         question.status = "served"
         question.served_at = utcnow()
         db.session.commit()
