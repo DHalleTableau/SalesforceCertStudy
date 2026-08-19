@@ -283,6 +283,10 @@ Already asked in this session -- cover a DIFFERENT aspect, term, or scenario, no
 Difficulty: {difficulty}/5 (1 = foundational recall, 5 = nuanced/scenario-based).
 {style_instruction}
 {avoid_instruction}
+Two common mistakes to avoid:
+1. Do NOT make the correct option(s) noticeably longer or more detailed than the wrong ones -- keep every option's length and level of detail roughly similar, so length itself is never a clue to the answer.
+2. Do NOT restate, list, or describe the answer options within the stem/question text itself -- the stem should present the scenario or question only. The options belong exclusively in option_keys/option_texts, never repeated or previewed in the stem.
+
 Ground the question in this exam content (do not invent facts outside it):
 ---
 {grounding_text}
