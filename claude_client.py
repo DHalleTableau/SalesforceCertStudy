@@ -256,16 +256,37 @@ def generate_question(
         else "Choose an appropriate domain from the grounding content below."
     )
 
-    style_instruction = (
-        "Write this as a REALISTIC WORK SCENARIO question: describe a "
-        "specific situation, request, or problem someone in this role "
-        "would face, then ask what the correct action/approach is. Do "
-        "NOT write a plain definition-recall question -- the user "
-        "should have to apply the concept to the scenario, not just "
-        "identify a term."
-        if style == "scenario"
-        else "Emphasize terminology precision -- the user has "
-        "identified terminology as their weakest area."
+    _SCENARIO_STYLE_INSTRUCTIONS = {
+        "scenario-general": (
+            "Write this as a REALISTIC WORK SCENARIO question: describe a "
+            "specific situation, request, or problem someone in this role "
+            "would face, then ask what the correct action/approach is. Do "
+            "NOT write a plain definition-recall question -- the user "
+            "should have to apply the concept to the scenario, not just "
+            "identify a term."
+        ),
+        "scenario-first-action": (
+            "Write this as a PRIORITIZATION scenario: describe a specific "
+            "situation, then ask what the FASTEST or FIRST thing to do is "
+            "-- not just a correct action in the abstract, but the right "
+            "first/immediate step among several plausible next steps. "
+            "The wrong options should be things that are eventually "
+            "reasonable but wrong AS THE FIRST STEP (wrong order, "
+            "premature, or address a lower-priority concern first)."
+        ),
+        "scenario-root-cause": (
+            "Write this as a ROOT-CAUSE DIAGNOSIS scenario: describe a "
+            "situation where something went wrong (an error, unexpected "
+            "behavior, a failed outcome), then ask what the team/client "
+            "MOST LIKELY did wrong to cause it. The wrong options should "
+            "be plausible-sounding but incorrect explanations for the "
+            "same observed symptom."
+        ),
+    }
+    style_instruction = _SCENARIO_STYLE_INSTRUCTIONS.get(
+        style,
+        "Emphasize terminology precision -- the user has identified "
+        "terminology as their weakest area.",
     )
 
     avoid_instruction = ""
@@ -280,7 +301,7 @@ Already asked in this session -- cover a DIFFERENT aspect, term, or scenario, no
 
 {format_instruction}
 {domain_instruction}
-Difficulty: {difficulty}/5 (1 = foundational recall, 5 = nuanced/scenario-based).
+Difficulty: {difficulty}/5 (1 = foundational recall, 5 = nuanced/scenario-based). At every difficulty level, wrong options must be genuinely plausible -- not throwaway distractors -- since real exam feedback on this cert found the actual exam's options frequently very close together. At difficulty 4-5 specifically, make the options nearly tied: more than one may seem individually defensible, but exactly one is the MOST correct per the exam content, and feedback_md must explain precisely why that one edges out the other close options.
 {style_instruction}
 {avoid_instruction}
 Two common mistakes to avoid:

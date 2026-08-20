@@ -75,17 +75,35 @@ def _next_pool_difficulty(total_generated):
 
 
 def _next_format(total_generated):
-    """Simple mix: every 3rd generated question is multi-select."""
-    return "multi" if total_generated % 3 == 2 else "single"
+    """Simple mix: every 6th generated question is multi-select. Real
+    exams the app was tested against used single-select exclusively,
+    but multi-select isn't being dropped -- just made less frequent
+    (was every 3rd). Easy to retune this ratio further either way.
+    """
+    return "multi" if total_generated % 6 == 5 else "single"
 
 
 def _next_style(total_generated):
-    """Simple mix: every 3rd generated question is scenario-based
-    ("how would you handle/fix this...") rather than terminology-
-    focused recall -- offset from _next_format's cadence (mod 3 == 1,
-    not == 2) so the two rotations don't always land on the same slot.
+    """Mix of terminology recall and three scenario sub-types, rotated
+    over an 8-slot cycle (terminology getting the majority, each
+    scenario flavor getting one slot) -- offset from _next_format's
+    cadence so the two rotations don't always land on the same slot.
+
+    The three scenario flavors exist because real exam experience
+    called out two specific patterns generic "how would you handle
+    this" scenarios weren't covering: prioritization ("what's the
+    fastest/first thing to do") and root-cause diagnosis ("what did
+    the team/client most likely do wrong"), alongside the original
+    general scenario style.
     """
-    return "scenario" if total_generated % 3 == 1 else "terminology"
+    slot = total_generated % 8
+    if slot == 5:
+        return "scenario-general"
+    if slot == 6:
+        return "scenario-first-action"
+    if slot == 7:
+        return "scenario-root-cause"
+    return "terminology"
 
 
 def _next_domain(cert, total_generated):
