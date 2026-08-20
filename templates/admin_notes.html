@@ -1,0 +1,69 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Add Grounding Notes</title>
+  <style>
+    body { font-family: sans-serif; max-width: 900px; margin: 2rem auto; }
+    textarea { width: 100%; font-family: monospace; min-height: 20rem; }
+    .summary { background: #eef; padding: 1rem; border-radius: 4px; }
+    .blocked { background: #fff3e0; padding: 1rem; border-radius: 4px; margin-top: 0.5rem; }
+    code { background: #eee; padding: 0.1rem 0.3rem; }
+  </style>
+</head>
+<body>
+  <h1>Add Grounding Notes</h1>
+  <p><a href="{{ url_for('admin_ingest') }}">&larr; Back to ingest</a></p>
+  <p>
+    Paste one document covering as many certs as you want in one go
+    (e.g. a batch of "X vs Y" gotcha comparisons). Mark where each
+    cert's section starts with a line reading exactly:
+  </p>
+  <pre><code># Cert: &lt;exact certification name&gt;</code></pre>
+  <p>
+    Everything until the next such line (or the end of the document)
+    becomes that cert's notes. Re-pasting an updated version of the
+    same document updates each cert's notes in place rather than
+    duplicating them.
+  </p>
+
+  <form method="post">
+    <textarea name="notes_text" placeholder="# Cert: Salesforce Certified Data 360 Consultant
+
+## Calculated Insight vs. Streaming Insight
+
+**Calculated Insight:** ...
+**Streaming Insight:** ...
+**Key gotcha:** ...
+
+# Cert: Salesforce Certified Agentforce Specialist
+
+## ..."></textarea>
+    <p></p>
+    <button type="submit">Save Notes</button>
+  </form>
+
+  {% if summary %}
+  <div class="summary">
+    <h2>Result</h2>
+    <ul>
+      <li>Sections parsed: {{ summary.notes_parsed }}</li>
+      <li>Saved: {{ summary.notes_parsed - summary.skipped_notes|length }}</li>
+    </ul>
+  </div>
+  {% endif %}
+
+  {% if summary and summary.skipped_notes %}
+  <div class="blocked">
+    <h2>Sections skipped</h2>
+    <p>These cert names didn't match anything in the Exam Guides tab
+       &mdash; check for a typo or a cert not yet ingested.</p>
+    <ul>
+      {% for note in summary.skipped_notes %}
+      <li>{{ note.cert_name }}: {{ note.reason }}</li>
+      {% endfor %}
+    </ul>
+  </div>
+  {% endif %}
+</body>
+</html>

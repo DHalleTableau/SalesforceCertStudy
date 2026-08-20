@@ -203,6 +203,83 @@ def save_prerequisites(parsed_edges):
     return skipped
 
 
+GOTCHA_NOTE_URL = "admin-note://gotchas"
+
+
+def parse_gotcha_notes(text):
+    """Split one pasted multi-cert document into per-cert chunks.
+
+    Each cert's section starts with a line reading exactly
+    "# Cert: <exact cert name>" and runs until the next such line (or
+    end of text) -- lets one admin-authored document (e.g. a batch of
+    "X vs Y" gotcha comparisons) cover many certs at once instead of
+    needing one file per cert. Text before the first "# Cert:" line is
+    ignored (e.g. a title or intro the admin didn't mean to attribute
+    to any cert).
+
+    Returns a list of {"cert_name", "content"} dicts, content stripped
+    of leading/trailing whitespace. Pure function, no DB dependency --
+    matches the parse_*_csv functions' contract in this module.
+    """
+    import re
+
+    sections = re.split(r"^# Cert: (.+)$", text, flags=re.MULTILINE)
+    # re.split with a capturing group returns
+    # [before_first_match, name1, content1, name2, content2, ...]
+    notes = []
+    for i in range(1, len(sections), 2):
+        cert_name = sections[i].strip()
+        content = sections[i + 1].strip()
+        if cert_name and content:
+            notes.append({"cert_name": cert_name, "content": content})
+    return notes
+
+
+def save_gotcha_notes(parsed_notes):
+    """Upsert parse_gotcha_notes() output into Resource, one row per
+    cert at the fixed GOTCHA_NOTE_URL so re-pasting an updated version
+    of the same document updates the existing note in place rather
+    than accumulating duplicates (same upsert-by-(cert_code, url)
+    pattern as save_exam_guides).
+
+    Skips (and reports, rather than crashing) any section whose cert
+    name doesn't match a known Cert -- same real risk as
+    save_prerequisites: a typo or a cert not yet in the Exam Guides
+    tab. Must be called inside a Flask app context.
+
+    Returns a list of skipped sections (each with a "reason" key).
+    """
+    from models import db, Cert, Resource
+
+    known_codes = {c.cert_code for c in Cert.query.all()}
+    skipped = []
+
+    for note in parsed_notes:
+        cert_name = note["cert_name"]
+        if cert_name not in known_codes:
+            skipped.append({**note, "reason": f"'{cert_name}' not found in Exam Guides tab"})
+            continue
+
+        resource = Resource.query.filter_by(
+            cert_code=cert_name, url=GOTCHA_NOTE_URL
+        ).first()
+        if resource is None:
+            db.session.add(
+                Resource(
+                    cert_code=cert_name,
+                    url=GOTCHA_NOTE_URL,
+                    role="additional",
+                    fetch_status="fetched",
+                    pasted_text=note["content"],
+                )
+            )
+        else:
+            resource.pasted_text = note["content"]
+
+    db.session.commit()
+    return skipped
+
+
 def _extract_page_text(page, url, timeout):
     """Navigate an already-open Playwright page to url and extract its
     main content with trafilatura. Returns (status, text) in the same

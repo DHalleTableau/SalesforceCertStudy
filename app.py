@@ -23,8 +23,10 @@ from cert_resolution import resolve_certs
 from ingest import (
     fetch_pending_resources,
     parse_exam_guides_csv,
+    parse_gotcha_notes,
     parse_prerequisites_csv,
     save_exam_guides,
+    save_gotcha_notes,
     save_prerequisites,
 )
 from models import (
@@ -112,6 +114,19 @@ def create_app():
             resource.pasted_text = pasted_text
             db.session.commit()
         return redirect(url_for("admin_ingest"))
+
+    @app.route("/admin/notes", methods=["GET", "POST"])
+    @admin_required
+    def admin_notes():
+        summary = None
+        if request.method == "POST":
+            parsed_notes = parse_gotcha_notes(request.form.get("notes_text", ""))
+            skipped_notes = save_gotcha_notes(parsed_notes)
+            summary = {
+                "notes_parsed": len(parsed_notes),
+                "skipped_notes": skipped_notes,
+            }
+        return render_template("admin_notes.html", summary=summary)
 
     @app.route("/admin/contributions")
     @admin_required
