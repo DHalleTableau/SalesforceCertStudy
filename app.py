@@ -68,6 +68,13 @@ def create_app():
     def healthz():
         return jsonify(status="ok")
 
+    @app.route("/debug/headers")
+    def debug_headers():
+        # Temporary: checking whether Heroku's new SSO layer passes an
+        # identity header we could use for real per-user login instead
+        # of building a separate one. Remove once that's answered.
+        return jsonify(dict(request.headers))
+
     @app.route("/admin/ingest", methods=["GET", "POST"])
     @admin_required
     def admin_ingest():
