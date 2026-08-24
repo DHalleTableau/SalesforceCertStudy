@@ -62,6 +62,24 @@
   </div>
   {% endif %}
 
+  {% if certs_without_content %}
+  <div class="blocked">
+    <h2>Certs with no usable content yet</h2>
+    <p>
+      These certs have no pasted or fetched text on any resource, so
+      the worker will silently generate nothing for them (a session
+      for one of these will just sit waiting forever with no
+      question). Paste content below for a blocked resource, or add
+      grounding notes, before pointing users at these certs.
+    </p>
+    <ul>
+      {% for cert in certs_without_content %}
+      <li>{{ cert.name }} ({{ cert.cert_code }})</li>
+      {% endfor %}
+    </ul>
+  </div>
+  {% endif %}
+
   {% if blocked_resources %}
   <h2>Pages that couldn't be auto-fetched</h2>
   <p>

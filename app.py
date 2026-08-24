@@ -107,8 +107,13 @@ def create_app():
             .all()
         )
 
+        certs_without_content = _certs_without_grounding_content()
+
         return render_template(
-            "admin_ingest.html", summary=summary, blocked_resources=blocked_resources
+            "admin_ingest.html",
+            summary=summary,
+            blocked_resources=blocked_resources,
+            certs_without_content=certs_without_content,
         )
 
     @app.route("/admin/ingest/paste-resource", methods=["POST"])
@@ -390,6 +395,28 @@ def create_app():
         )
 
     return app
+
+
+def _certs_without_grounding_content():
+    """Certs with zero Resource rows carrying real content (pasted_text
+    or fetched_text) -- these will never generate a question, but that
+    failure is otherwise silent: worker.py's top_up_cert_pool just
+    returns early with no log line and no user-facing error when
+    grounding text is empty (a real gap that caused a session to sit
+    forever with no question and no explanation). Surfaced here so an
+    admin sees it immediately after ingest, before anyone hits it.
+    """
+    certs_with_content = {
+        r.cert_code
+        for r in Resource.query.filter(
+            db.or_(Resource.pasted_text.isnot(None), Resource.fetched_text.isnot(None))
+        ).all()
+    }
+    return [
+        cert
+        for cert in Cert.query.order_by(Cert.name).all()
+        if cert.cert_code not in certs_with_content
+    ]
 
 
 def _is_long_wait(study_session, question):
