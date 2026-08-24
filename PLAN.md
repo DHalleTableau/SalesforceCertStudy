@@ -180,6 +180,41 @@ paste fallback for blocked/JS-rendered ones. Primary (Base) sources
 weighted most heavily in grounding (ordering + labeling in the prompt,
 not a numeric scheme — see `claude_client.assemble_grounding_text`).
 
+**Run bulk CSV ingest locally, not against the deployed app.**
+Tier-1 auto-fetch (`playwright`) is deliberately excluded from
+`requirements.txt` — no prebuilt wheel on Heroku's build image, and no
+Chromium binary on a dyno anyway (see HISTORY.md). `fetch_pending_resources`
+detects this and no-ops instead of crashing, but that means running
+`/admin/ingest` against the *deployed* app never auto-fetches anything —
+every new resource sits at `fetch_status="pending"` forever, needing a
+manual paste. For a handful of resources that's fine; for dozens at
+once (adding several new certs) it doesn't scale.
+
+Instead, for any bulk CSV ingest, run `app.py` locally pointed at the
+production database, so playwright is actually available:
+
+```bash
+source .venv/bin/activate
+export DATABASE_URL=$(heroku config:get DATABASE_URL -a sf-cert-study)
+export FLASK_SECRET_KEY=dev-only-not-secure
+export ADMIN_LOGIN_USERNAME=<admin username>
+export ADMIN_LOGIN_PASSWORD=<admin password>
+python3 app.py
+```
+
+Then paste the CSVs into `http://localhost:5000/admin/ingest` — same
+production DB, but this time Tier-1 actually runs, so only genuinely
+blocked/JS-rendered pages need a manual paste afterward (on either the
+local or deployed admin ingest page — the paste box now shows for any
+resource missing content, not just ones already marked
+`blocked_needs_paste`).
+
+The admin ingest page also flags any cert with zero resources carrying
+real content (pasted or fetched) right after ingest, so this can't go
+silently unnoticed the way it did before — previously a cert with no
+usable grounding text just made the worker generate nothing for it,
+forever, with no error anywhere (see HISTORY.md).
+
 ## Cert Overview Derivation
 
 `claude_client.derive_cert_overview`: on first use, the worker derives

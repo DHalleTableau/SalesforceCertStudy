@@ -442,3 +442,50 @@ only ever show what Heroku's edge/router decided to return, which
 looks identical whether the real cause is a network/access issue or
 the dyno never booting at all. Check `heroku logs` early next time
 something is unreachable, not just the HTTP response.
+
+## Admin ingest on the deployed app silently never auto-fetched, and gave no way to paste around it
+
+Adding two new certs via `/admin/ingest` on the deployed Heroku app
+crashed with a 500: `ModuleNotFoundError: No module named 'playwright'`.
+`fetch_pending_resources` (ingest.py) unconditionally imported
+`playwright`, but it's deliberately excluded from `requirements.txt`
+(see the entry above) -- fine for the local-only workaround this was
+designed around, but nothing stopped the same route from being hit on
+the deployed web dyno, where it always crashes.
+
+Fixed the crash first: `fetch_pending_resources` now catches
+`ModuleNotFoundError` and returns a zero `{"fetched": 0, "blocked": 0}`
+instead, so ingest against the deployed app degrades to paste-only
+rather than erroring.
+
+That surfaced two further, worse problems once the crash was gone:
+
+1. **Silent dead end.** A cert with no usable resource content (no
+   `pasted_text`/`fetched_text` on any of its resources) makes
+   `worker.py`'s `top_up_cert_pool` return early with no log line and
+   no error -- a session for that cert just sits waiting forever with
+   zero indication why. Fixed by adding a "certs with no usable
+   content yet" warning to `/admin/ingest`, computed fresh on every
+   load (`_certs_without_grounding_content` in `app.py`).
+
+2. **No way to actually supply the content.** The per-resource paste
+   box on `/admin/ingest` only ever showed for resources already
+   marked `fetch_status="blocked_needs_paste"` -- but on the deployed
+   app, auto-fetch is now a no-op, so new resources sit at `"pending"`
+   forever and never earn that status. Result: the admin could see
+   *that* a cert had no content, but had nowhere on the page to paste
+   it in. Fixed by widening the paste-box query to any resource
+   missing both `pasted_text` and `fetched_text`, regardless of
+   `fetch_status`.
+
+Root lesson, and the actual scaling problem underneath all three bugs:
+running bulk ingest against the *deployed* app means Tier-1 auto-fetch
+never runs at all (no playwright there), so every single new resource
+needs a manual paste -- fine for one or two, not for the "dozens at
+once" case of adding several new certs. The real fix isn't more paste
+boxes, it's ingesting through a **local** `app.py` process pointed at
+the production database instead, where playwright is actually
+installed and auto-fetch does its job -- see PLAN.md's Resource
+Ingestion section for the exact command. Manual paste should be the
+fallback for genuinely blocked/JS-rendered pages, not the default path
+for every new resource.
