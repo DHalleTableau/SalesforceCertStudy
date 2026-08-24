@@ -338,20 +338,51 @@ Call submit_question with the question. feedback_md must be long-form: explain w
     option_texts = parsed.get("option_texts")
     if not isinstance(option_keys, list) or not isinstance(option_texts, list):
         option_keys, option_texts = [], []
-    options = [
-        {"key": k, "text": t} for k, t in zip(option_keys, option_texts)
-    ]
+    raw_correct = parsed.get("correct", []) if isinstance(parsed.get("correct"), list) else []
+
+    options, correct = _shuffle_option_order(option_keys, option_texts, raw_correct)
 
     result = {
         "stem": parsed.get("stem", ""),
         "options": options,
-        "correct": parsed.get("correct", []) if isinstance(parsed.get("correct"), list) else [],
+        "correct": correct,
         "feedback_md": _strip_tool_call_artifacts(parsed.get("feedback_md", "")),
         "format": format,
         "difficulty": difficulty,
         "domain": domain,
     }
     return result
+
+
+_KEY_LETTERS = ["A", "B", "C", "D", "E"]
+
+
+def _shuffle_option_order(option_keys, option_texts, raw_correct):
+    """Re-randomize which letter ends up on which option text, and
+    relabel `correct` to match.
+
+    The model itself decides the key/text pairing (see
+    _generate_question_tool's flat-array rationale) and nothing
+    downstream previously touched that ordering -- so any positional
+    bias in the model's own output (e.g. consistently putting the
+    correct answer first) landed unfiltered in what the user sees.
+    Shuffling here, independent of whatever bias the model has, is what
+    actually guarantees the displayed correct-answer position is random
+    -- prompting alone (see the anti-length-bias instructions above)
+    can reduce a model's bias but can't be relied on to eliminate it.
+    """
+    import random
+
+    shuffled_pairs = list(zip(option_keys, option_texts))
+    random.shuffle(shuffled_pairs)
+
+    options = []
+    correct = []
+    for new_key, (orig_key, text) in zip(_KEY_LETTERS, shuffled_pairs):
+        options.append({"key": new_key, "text": text})
+        if orig_key in raw_correct:
+            correct.append(new_key)
+    return options, correct
 
 
 _ARTIFACT_MARKERS = (
