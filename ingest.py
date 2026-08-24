@@ -371,8 +371,18 @@ def fetch_pending_resources(timeout=10):
 
     Must be called inside a Flask app context. Returns a
     {"fetched": n, "blocked": n} summary.
+
+    Playwright is local-only tooling (excluded from requirements.txt --
+    no prebuilt wheel on Heroku's build image, and no Chromium binary on
+    a dyno anyway), so this is a no-op when it isn't installed, e.g. when
+    the admin ingest route runs against the deployed web dyno. Resources
+    are left untouched for a later local run or a manual paste.
     """
-    from playwright.sync_api import sync_playwright
+    try:
+        from playwright.sync_api import sync_playwright
+    except ModuleNotFoundError:
+        return {"fetched": 0, "blocked": 0}
+
     from models import db, Resource
 
     resources = Resource.query.filter(
