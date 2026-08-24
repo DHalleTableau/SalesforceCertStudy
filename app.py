@@ -25,6 +25,7 @@ from ingest import (
     parse_exam_guides_csv,
     parse_gotcha_notes,
     parse_prerequisites_csv,
+    playwright_available,
     save_exam_guides,
     save_gotcha_notes,
     save_prerequisites,
@@ -122,6 +123,7 @@ def create_app():
             summary=summary,
             blocked_resources=blocked_resources,
             certs_without_content=certs_without_content,
+            auto_fetch_available=playwright_available(),
         )
 
     @app.route("/admin/ingest/paste-resource", methods=["POST"])

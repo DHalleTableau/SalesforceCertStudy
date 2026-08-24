@@ -22,6 +22,23 @@
     a live fetch.
   </p>
 
+  {% if not auto_fetch_available %}
+  <div class="blocked">
+    <h2>Auto-fetch unavailable in this environment</h2>
+    <p>
+      <code>playwright</code> isn't installed here, so every resource
+      you ingest will need to be pasted in manually below &mdash; this
+      is always true on the deployed Heroku app (no prebuilt wheel,
+      no Chromium binary on a dyno), and can also happen on a freshly
+      rebuilt local venv. For bulk ingest with real auto-fetch, run
+      <code>app.py</code> locally pointed at the production database
+      (see PLAN.md's Resource Ingestion section), after installing:
+    </p>
+    <pre><code>pip install playwright trafilatura
+playwright install chromium</code></pre>
+  </div>
+  {% endif %}
+
   <form method="post">
     <label for="exam_guides_csv"><strong>Exam Guides</strong> tab (CSV)</label><br>
     <textarea id="exam_guides_csv" name="exam_guides_csv" rows="14"></textarea>

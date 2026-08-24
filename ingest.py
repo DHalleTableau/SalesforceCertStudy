@@ -23,6 +23,21 @@ import io
 _MIN_FETCHED_TEXT_LEN = 200
 
 
+def playwright_available():
+    """True if Tier-1 auto-fetch can actually run in this environment.
+    False on the deployed Heroku app (excluded from requirements.txt,
+    see PLAN.md) and on a freshly rebuilt local venv that hasn't had
+    `pip install playwright trafilatura && playwright install chromium`
+    run yet -- a real gap that once silently degraded ingest to
+    paste-only with no indication why (see HISTORY.md).
+    """
+    try:
+        import playwright  # noqa: F401
+    except ModuleNotFoundError:
+        return False
+    return True
+
+
 def _normalize_header(name):
     return name.strip().lower().replace(" ", "_")
 
