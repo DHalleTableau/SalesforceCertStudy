@@ -135,6 +135,16 @@ MIN_FEEDBACK_LENGTH = 100
 
 MIN_SENTENCE_LENGTH_FOR_DUPLICATE_CHECK = 15
 
+# Correct option(s) average length can't exceed the wrong ones' average
+# by more than this factor. Prompting alone (claude_client's explicit
+# anti-length-bias instruction) reduces but doesn't reliably eliminate
+# "the longest answer is always correct" -- the exact failure mode
+# real Trailhead practice questions are notorious for, and one the
+# user explicitly does not want creeping in here. This is the
+# deterministic backstop: reject and regenerate rather than trust the
+# prompt to have worked.
+LENGTH_BIAS_MARGIN = 1.3
+
 
 def _has_duplicate_sentence(text):
     """True if any non-trivial sentence appears more than once verbatim
@@ -146,6 +156,30 @@ def _has_duplicate_sentence(text):
     sentences = [s.strip() for s in re.split(r"(?<=[.?!])\s+", text) if s.strip()]
     significant = [s for s in sentences if len(s) >= MIN_SENTENCE_LENGTH_FOR_DUPLICATE_CHECK]
     return len(significant) != len(set(significant))
+
+
+def _length_bias_reason(options, correct):
+    """None if option lengths look fine, else a string reason for
+    rejection. Compares the average character length of the correct
+    option(s) against the wrong ones' average -- not just "is the
+    correct one the single longest," since that alone would also
+    reject perfectly reasonable questions where it's longest by a
+    trivial margin. Only flags a real, exploitable skew.
+    """
+    correct_keys = set(correct)
+    correct_lens = [len(o["text"]) for o in options if o.get("key") in correct_keys]
+    wrong_lens = [len(o["text"]) for o in options if o.get("key") not in correct_keys]
+    if not correct_lens or not wrong_lens:
+        return None
+
+    avg_correct = sum(correct_lens) / len(correct_lens)
+    avg_wrong = sum(wrong_lens) / len(wrong_lens)
+    if avg_wrong > 0 and avg_correct > avg_wrong * LENGTH_BIAS_MARGIN:
+        return (
+            f"correct option(s) avg length {avg_correct:.0f} chars vs "
+            f"wrong option(s) avg {avg_wrong:.0f} chars -- length bias"
+        )
+    return None
 
 
 def _is_valid_question(question, format):
@@ -178,6 +212,10 @@ def _is_valid_question(question, format):
 
     if _has_duplicate_sentence(question.get("stem", "")):
         return False, "stem contains a duplicated sentence"
+
+    length_bias_reason = _length_bias_reason(question.get("options", []), correct)
+    if length_bias_reason is not None:
+        return False, length_bias_reason
 
     return True, ""
 
