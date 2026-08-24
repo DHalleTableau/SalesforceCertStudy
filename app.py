@@ -101,8 +101,16 @@ def create_app():
                 "blocked": fetch_counts["blocked"],
             }
 
+        # Any resource still missing real content -- not just ones
+        # fetch_status marks "blocked_needs_paste". On the deployed web
+        # dyno (no playwright), auto-fetch is a no-op and resources sit
+        # at "pending" forever, which used to mean no paste box ever
+        # appeared for them at all -- this is the admin's only way to
+        # supply content for those unless auto-fetch is run locally.
         blocked_resources = (
-            Resource.query.filter_by(fetch_status="blocked_needs_paste")
+            Resource.query.filter(
+                Resource.pasted_text.is_(None), Resource.fetched_text.is_(None)
+            )
             .order_by(Resource.cert_code)
             .all()
         )
