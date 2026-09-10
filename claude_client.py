@@ -181,16 +181,23 @@ def _generate_question_tool(format):
                         "maxItems": max_correct,
                         "items": {"type": "string"},
                     },
-                    "feedback_md": {
-                        "type": "string",
+                    "option_explanations": {
+                        "type": "array",
                         "description": (
-                            "Long-form feedback: why the correct answer(s) are "
-                            "correct, AND a separate explanation for each wrong "
-                            "option covering specifically why it is wrong. Should "
-                            "be thorough and terminology-focused, not a brief "
-                            "summary -- this is shown to the user after they "
-                            "answer, not truncated or shortened."
+                            f"Exactly {num_options} explanations, in the SAME "
+                            "order as option_keys/option_texts (one per "
+                            "option, whether correct or wrong) -- not a "
+                            "single combined paragraph. For a correct "
+                            "option, explain why it's correct. For a wrong "
+                            "option, explain specifically why it's wrong. "
+                            "Each should be thorough and terminology-focused, "
+                            "not a brief summary -- these are shown to the "
+                            "user after they answer, not truncated or "
+                            "shortened."
                         ),
+                        "minItems": num_options,
+                        "maxItems": num_options,
+                        "items": {"type": "string"},
                     },
                 },
                 "required": [
@@ -198,7 +205,7 @@ def _generate_question_tool(format):
                     "option_keys",
                     "option_texts",
                     "correct",
-                    "feedback_md",
+                    "option_explanations",
                 ],
             },
         },
@@ -301,7 +308,7 @@ Already asked in this session -- cover a DIFFERENT aspect, term, or scenario, no
 
 {format_instruction}
 {domain_instruction}
-Difficulty: {difficulty}/5 (1 = foundational recall, 5 = nuanced/scenario-based). At every difficulty level, wrong options must be genuinely plausible -- not throwaway distractors -- since real exam feedback on this cert found the actual exam's options frequently very close together. At difficulty 4-5 specifically, make the options nearly tied: more than one may seem individually defensible, but exactly one is the MOST correct per the exam content, and feedback_md must explain precisely why that one edges out the other close options.
+Difficulty: {difficulty}/5 (1 = foundational recall, 5 = nuanced/scenario-based). At every difficulty level, wrong options must be genuinely plausible -- not throwaway distractors -- since real exam feedback on this cert found the actual exam's options frequently very close together. At difficulty 4-5 specifically, make the options nearly tied: more than one may seem individually defensible, but exactly one is the MOST correct per the exam content, and its option_explanations entry must explain precisely why that one edges out the other close options.
 {style_instruction}
 {avoid_instruction}
 Three common mistakes to avoid:
@@ -314,7 +321,7 @@ Ground the question in this exam content (do not invent facts outside it):
 {grounding_text}
 ---
 
-Call submit_question with the question. feedback_md must be long-form: explain why the correct answer(s) are correct, AND give a separate explanation for why EACH wrong option is wrong. Do not write a short summary -- this is the full explanation shown to the user."""
+Call submit_question with the question. option_explanations must have one entry per option, in the same order as option_keys/option_texts: for the correct answer(s), explain why they're correct; for each wrong option, explain specifically why it's wrong. Each entry should be a full explanation, not a short summary -- this is shown to the user after they answer."""
 
     response = client.chat.completions.create(
         model=MODEL,
@@ -337,17 +344,22 @@ Call submit_question with the question. feedback_md must be long-form: explain w
     # mismatch trips validation cleanly.
     option_keys = parsed.get("option_keys")
     option_texts = parsed.get("option_texts")
+    option_explanations = parsed.get("option_explanations")
     if not isinstance(option_keys, list) or not isinstance(option_texts, list):
         option_keys, option_texts = [], []
+    if not isinstance(option_explanations, list):
+        option_explanations = []
     raw_correct = parsed.get("correct", []) if isinstance(parsed.get("correct"), list) else []
 
-    options, correct = _shuffle_option_order(option_keys, option_texts, raw_correct)
+    options, correct, feedback_md = _shuffle_option_order(
+        option_keys, option_texts, option_explanations, raw_correct
+    )
 
     result = {
         "stem": parsed.get("stem", ""),
         "options": options,
         "correct": correct,
-        "feedback_md": _strip_tool_call_artifacts(parsed.get("feedback_md", "")),
+        "feedback_md": feedback_md,
         "format": format,
         "difficulty": difficulty,
         "domain": domain,
@@ -358,11 +370,24 @@ Call submit_question with the question. feedback_md must be long-form: explain w
 _KEY_LETTERS = ["A", "B", "C", "D", "E"]
 
 
-def _shuffle_option_order(option_keys, option_texts, raw_correct):
-    """Re-randomize which letter ends up on which option text, and
-    relabel `correct` to match.
+def _shuffle_option_order(option_keys, option_texts, option_explanations, raw_correct):
+    """Re-randomize which letter ends up on which option text, relabel
+    `correct` to match, and assemble feedback_md server-side (from
+    each option's own explanation, in the SAME final order/letters)
+    instead of trusting the model's free-text feedback.
 
-    The model itself decides the key/text pairing (see
+    The model previously wrote one combined feedback_md paragraph
+    referencing options by the letters *it* assigned -- once this
+    function started shuffling which letter lands on which option
+    (to kill positional bias), that free text's letter references
+    went stale, e.g. "Option B is correct" after B had been relabeled
+    to D. Requiring one explanation per option (option_explanations,
+    same flat-array pattern as option_keys/option_texts) and building
+    feedback_md ourselves from the post-shuffle labels makes the
+    letters the user sees and the letters in the explanation always
+    match, by construction.
+
+    The model itself decides the key/text/explanation pairing (see
     _generate_question_tool's flat-array rationale) and nothing
     downstream previously touched that ordering -- so any positional
     bias in the model's own output (e.g. consistently putting the
@@ -374,16 +399,30 @@ def _shuffle_option_order(option_keys, option_texts, raw_correct):
     """
     import random
 
+    # Keyed by the model's *original* key, before any shuffling --
+    # looked up per shuffled option below so each explanation follows
+    # its own option text regardless of where it lands.
+    explanation_by_key = dict(zip(option_keys, option_explanations))
+
     shuffled_pairs = list(zip(option_keys, option_texts))
     random.shuffle(shuffled_pairs)
 
     options = []
     correct = []
+    feedback_parts = []
     for new_key, (orig_key, text) in zip(_KEY_LETTERS, shuffled_pairs):
         options.append({"key": new_key, "text": text})
-        if orig_key in raw_correct:
+        is_correct = orig_key in raw_correct
+        if is_correct:
             correct.append(new_key)
-    return options, correct
+
+        explanation = _strip_tool_call_artifacts(explanation_by_key.get(orig_key, "")).strip()
+        if explanation:
+            label = "Correct" if is_correct else "Incorrect"
+            feedback_parts.append(f"**{new_key}. {text}** -- {label}: {explanation}")
+
+    feedback_md = "\n\n".join(feedback_parts)
+    return options, correct, feedback_md
 
 
 _ARTIFACT_MARKERS = (
