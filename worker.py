@@ -145,7 +145,15 @@ MIN_SENTENCE_LENGTH_FOR_DUPLICATE_CHECK = 15
 # user explicitly does not want creeping in here. This is the
 # deterministic backstop: reject and regenerate rather than trust the
 # prompt to have worked.
-LENGTH_BIAS_MARGIN = 1.3
+#
+# 1.3 turned out unrealistically strict: real generations from this
+# model consistently land around 1.4-1.5x (correct answers needing a
+# few more words to be precise), so every single attempt was getting
+# rejected -- burning all 5 retries and generating *nothing* for that
+# poll cycle, which is worse than the length bias itself. 1.6 still
+# catches the clearly exploitable case (correct answer dramatically
+# longer) while accepting the model's normal range.
+LENGTH_BIAS_MARGIN = 1.6
 
 
 def _has_duplicate_sentence(text):
@@ -160,13 +168,13 @@ def _has_duplicate_sentence(text):
     return len(significant) != len(set(significant))
 
 
-def _length_bias_reason(options, correct):
-    """None if option lengths look fine, else a string reason for
-    rejection. Compares the average character length of the correct
-    option(s) against the wrong ones' average -- not just "is the
-    correct one the single longest," since that alone would also
-    reject perfectly reasonable questions where it's longest by a
-    trivial margin. Only flags a real, exploitable skew.
+def _length_bias_ratio(options, correct):
+    """None if there's nothing to compare, else the ratio of the
+    correct option(s)' average character length to the wrong ones'
+    average -- >1 means correct runs longer. Split out from
+    _length_bias_reason so callers can rank rejected candidates by how
+    biased they are (used for the least-biased-of-5 fallback below),
+    not just get a pass/fail.
     """
     correct_keys = set(correct)
     correct_lens = [len(o["text"]) for o in options if o.get("key") in correct_keys]
@@ -176,11 +184,61 @@ def _length_bias_reason(options, correct):
 
     avg_correct = sum(correct_lens) / len(correct_lens)
     avg_wrong = sum(wrong_lens) / len(wrong_lens)
-    if avg_wrong > 0 and avg_correct > avg_wrong * LENGTH_BIAS_MARGIN:
+    if avg_wrong == 0:
+        return None
+    return avg_correct / avg_wrong, avg_correct, avg_wrong
+
+
+def _length_bias_reason(options, correct):
+    """None if option lengths look fine, else a string reason for
+    rejection. Compares the average character length of the correct
+    option(s) against the wrong ones' average -- not just "is the
+    correct one the single longest," since that alone would also
+    reject perfectly reasonable questions where it's longest by a
+    trivial margin. Only flags a real, exploitable skew.
+    """
+    ratio_info = _length_bias_ratio(options, correct)
+    if ratio_info is None:
+        return None
+
+    ratio, avg_correct, avg_wrong = ratio_info
+    if ratio > LENGTH_BIAS_MARGIN:
         return (
             f"correct option(s) avg length {avg_correct:.0f} chars vs "
             f"wrong option(s) avg {avg_wrong:.0f} chars -- length bias"
         )
+    return None
+
+
+def _structural_validity_reason(question, format):
+    """None if question passes every check EXCEPT length bias, else a
+    string reason. Split out from _is_valid_question so the retry loop
+    in top_up_cert_pool can tell "genuinely malformed" (wrong option
+    count, missing feedback, etc.) apart from "structurally fine, just
+    length-biased" -- only the latter is safe to use as a fallback
+    candidate if every attempt gets rejected.
+    """
+    expected_options = 4 if format == "single" else 5
+    actual_options = len(question.get("options", []))
+    if actual_options != expected_options:
+        return f"expected {expected_options} options, got {actual_options}"
+
+    min_correct, max_correct = (1, 1) if format == "single" else (2, 3)
+    correct = question.get("correct", [])
+    if not (min_correct <= len(correct) <= max_correct):
+        return f"expected {min_correct}-{max_correct} correct, got {len(correct)}"
+
+    option_keys = {o.get("key") for o in question.get("options", [])}
+    if not set(correct).issubset(option_keys):
+        return f"correct keys {correct} not a subset of option keys {option_keys}"
+
+    feedback_len = len(question.get("feedback_md", ""))
+    if feedback_len < MIN_FEEDBACK_LENGTH:
+        return f"feedback_md too short after cleanup: {feedback_len} chars"
+
+    if _has_duplicate_sentence(question.get("stem", "")):
+        return "stem contains a duplicated sentence"
+
     return None
 
 
@@ -194,28 +252,13 @@ def _is_valid_question(question, format):
     Returns (True, "") or (False, "<reason>") so callers can log why a
     candidate was rejected instead of just a bare pass/fail.
     """
-    expected_options = 4 if format == "single" else 5
-    actual_options = len(question.get("options", []))
-    if actual_options != expected_options:
-        return False, f"expected {expected_options} options, got {actual_options}"
+    reason = _structural_validity_reason(question, format)
+    if reason is not None:
+        return False, reason
 
-    min_correct, max_correct = (1, 1) if format == "single" else (2, 3)
-    correct = question.get("correct", [])
-    if not (min_correct <= len(correct) <= max_correct):
-        return False, f"expected {min_correct}-{max_correct} correct, got {len(correct)}"
-
-    option_keys = {o.get("key") for o in question.get("options", [])}
-    if not set(correct).issubset(option_keys):
-        return False, f"correct keys {correct} not a subset of option keys {option_keys}"
-
-    feedback_len = len(question.get("feedback_md", ""))
-    if feedback_len < MIN_FEEDBACK_LENGTH:
-        return False, f"feedback_md too short after cleanup: {feedback_len} chars"
-
-    if _has_duplicate_sentence(question.get("stem", "")):
-        return False, "stem contains a duplicated sentence"
-
-    length_bias_reason = _length_bias_reason(question.get("options", []), correct)
+    length_bias_reason = _length_bias_reason(
+        question.get("options", []), question.get("correct", [])
+    )
     if length_bias_reason is not None:
         return False, length_bias_reason
 
@@ -300,6 +343,7 @@ def top_up_cert_pool(cert_code):
         ]
 
         question = None
+        least_biased_fallback = None  # (ratio, candidate) among structurally-valid rejects
         for attempt_num in range(MAX_GENERATION_ATTEMPTS):
             candidate = generate_question(
                 cert_name=cert.name,
@@ -315,6 +359,29 @@ def top_up_cert_pool(cert_code):
                 question = candidate
                 break
             print(f"  [attempt {attempt_num + 1}/{MAX_GENERATION_ATTEMPTS}] rejected: {reason}")
+
+            # Only length bias is a "close enough, just imperfect" miss
+            # -- other rejections (wrong option count, missing
+            # feedback, etc.) mean the candidate is genuinely broken
+            # and unsafe to fall back to.
+            if _structural_validity_reason(candidate, format) is None:
+                ratio_info = _length_bias_ratio(
+                    candidate.get("options", []), candidate.get("correct", [])
+                )
+                if ratio_info is not None:
+                    ratio = ratio_info[0]
+                    if least_biased_fallback is None or ratio < least_biased_fallback[0]:
+                        least_biased_fallback = (ratio, candidate)
+
+        if question is None and least_biased_fallback is not None:
+            # Every attempt was rejected purely for length bias -- use
+            # the least-biased one rather than generating nothing for
+            # this poll cycle. A real, hard cap (LENGTH_BIAS_MARGIN)
+            # already keeps the worst cases out; this just stops a
+            # cert from silently never refilling its pool if the model
+            # consistently lands a little over that cap.
+            ratio, question = least_biased_fallback
+            print(f"  no attempt passed the length-bias check -- using least-biased fallback (ratio {ratio:.2f})")
 
         if question is None:
             # Couldn't get a well-formed question after retries -- skip
