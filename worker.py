@@ -22,6 +22,8 @@ import re
 import time
 from datetime import datetime, timezone
 
+from sqlalchemy import text
+
 from app import app
 from claude_client import assemble_grounding_text, derive_cert_overview, generate_question
 from models import Cert, QuestionQueueItem, StudySession, db
@@ -240,83 +242,111 @@ def top_up_cert_pool(cert_code):
     and generates another if still short, so a cert with many
     concurrent claimants gets refilled steadily rather than in one
     long blocking run.
+
+    Running multiple worker.py processes at once (the simplest way to
+    generate faster than a single process's sequential poll loop can)
+    means two processes could otherwise both see the same cert short
+    by one and both decide to generate for it in the same poll tick --
+    wasted API calls, not a correctness bug, but avoidable. A
+    non-blocking Postgres advisory lock, keyed per cert_code, makes
+    only one process at a time "in the middle of deciding" for a given
+    cert; a process that doesn't get the lock just skips this cert
+    this cycle and tries again next time. Held on its own connection
+    (not db.session's) so a commit partway through can't silently
+    detach the lock from the connection that's still holding it.
     """
-    ensure_cert_overview(cert_code)
-
-    cert = Cert.query.get(cert_code)
-    if cert is None:
+    lock_conn = db.engine.connect()
+    got_lock = lock_conn.execute(
+        text("SELECT pg_try_advisory_lock(hashtext(:cert_code)::bigint)"),
+        {"cert_code": cert_code},
+    ).scalar()
+    if not got_lock:
+        lock_conn.close()
         return
 
-    unclaimed_ready_count = QuestionQueueItem.query.filter_by(
-        cert_code=cert_code, session_id=None, status="ready"
-    ).count()
-    if unclaimed_ready_count >= POOL_SIZE:
-        return
+    try:
+        ensure_cert_overview(cert_code)
 
-    grounding = assemble_grounding_text(cert_code)
-    if not grounding:
-        return  # nothing to generate from yet
+        cert = Cert.query.get(cert_code)
+        if cert is None:
+            return
 
-    total_generated = _cert_total_generated(cert_code)
-    difficulty = _next_pool_difficulty(total_generated)
-    format = _next_format(total_generated)
-    style = _next_style(total_generated)
-    domain = _next_domain(cert, total_generated)
+        unclaimed_ready_count = QuestionQueueItem.query.filter_by(
+            cert_code=cert_code, session_id=None, status="ready"
+        ).count()
+        if unclaimed_ready_count >= POOL_SIZE:
+            return
 
-    # Cross-session, cert-wide: nothing stopped a brand-new session
-    # from repeating a question asked in an earlier one. Capped to the
-    # most recent AVOID_STEMS_LIMIT so the prompt doesn't grow
-    # unbounded over weeks of practice.
-    avoid_stems = [
-        item.stem
-        for item in QuestionQueueItem.query.filter_by(cert_code=cert_code)
-        .order_by(QuestionQueueItem.created_at.desc())
-        .limit(AVOID_STEMS_LIMIT)
-        .all()
-    ]
+        grounding = assemble_grounding_text(cert_code)
+        if not grounding:
+            return  # nothing to generate from yet
 
-    question = None
-    for attempt_num in range(MAX_GENERATION_ATTEMPTS):
-        candidate = generate_question(
-            cert_name=cert.name,
-            domain=domain,
-            difficulty=difficulty,
-            format=format,
-            style=style,
-            grounding_text=grounding,
-            avoid_stems=avoid_stems,
+        total_generated = _cert_total_generated(cert_code)
+        difficulty = _next_pool_difficulty(total_generated)
+        format = _next_format(total_generated)
+        style = _next_style(total_generated)
+        domain = _next_domain(cert, total_generated)
+
+        # Cross-session, cert-wide: nothing stopped a brand-new session
+        # from repeating a question asked in an earlier one. Capped to
+        # the most recent AVOID_STEMS_LIMIT so the prompt doesn't grow
+        # unbounded over weeks of practice.
+        avoid_stems = [
+            item.stem
+            for item in QuestionQueueItem.query.filter_by(cert_code=cert_code)
+            .order_by(QuestionQueueItem.created_at.desc())
+            .limit(AVOID_STEMS_LIMIT)
+            .all()
+        ]
+
+        question = None
+        for attempt_num in range(MAX_GENERATION_ATTEMPTS):
+            candidate = generate_question(
+                cert_name=cert.name,
+                domain=domain,
+                difficulty=difficulty,
+                format=format,
+                style=style,
+                grounding_text=grounding,
+                avoid_stems=avoid_stems,
+            )
+            is_valid, reason = _is_valid_question(candidate, format)
+            if is_valid:
+                question = candidate
+                break
+            print(f"  [attempt {attempt_num + 1}/{MAX_GENERATION_ATTEMPTS}] rejected: {reason}")
+
+        if question is None:
+            # Couldn't get a well-formed question after retries -- skip
+            # this slot for now rather than insert bad data; the next
+            # poll cycle will try again.
+            return
+
+        db.session.add(
+            QuestionQueueItem(
+                session_id=None,
+                cert_code=cert_code,
+                domain=question.get("domain"),
+                difficulty=question["difficulty"],
+                format=question["format"],
+                stem=question["stem"],
+                options_json=question["options"],
+                correct_json=question["correct"],
+                feedback_md=question["feedback_md"],
+                status="ready",
+            )
         )
-        is_valid, reason = _is_valid_question(candidate, format)
-        if is_valid:
-            question = candidate
-            break
-        print(f"  [attempt {attempt_num + 1}/{MAX_GENERATION_ATTEMPTS}] rejected: {reason}")
-
-    if question is None:
-        # Couldn't get a well-formed question after retries -- skip
-        # this slot for now rather than insert bad data; the next poll
-        # cycle will try again.
-        return
-
-    db.session.add(
-        QuestionQueueItem(
-            session_id=None,
-            cert_code=cert_code,
-            domain=question.get("domain"),
-            difficulty=question["difficulty"],
-            format=question["format"],
-            stem=question["stem"],
-            options_json=question["options"],
-            correct_json=question["correct"],
-            feedback_md=question["feedback_md"],
-            status="ready",
+        db.session.commit()
+        print(
+            f"  generated {cert_code} [{format}/{style}] domain={domain} "
+            f"difficulty={difficulty} pool={unclaimed_ready_count + 1}/{POOL_SIZE}"
         )
-    )
-    db.session.commit()
-    print(
-        f"  generated {cert_code} [{format}/{style}] domain={domain} "
-        f"difficulty={difficulty} pool={unclaimed_ready_count + 1}/{POOL_SIZE}"
-    )
+    finally:
+        lock_conn.execute(
+            text("SELECT pg_advisory_unlock(hashtext(:cert_code)::bigint)"),
+            {"cert_code": cert_code},
+        )
+        lock_conn.close()
 
 
 def main():

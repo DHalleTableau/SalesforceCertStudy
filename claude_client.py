@@ -304,9 +304,10 @@ Already asked in this session -- cover a DIFFERENT aspect, term, or scenario, no
 Difficulty: {difficulty}/5 (1 = foundational recall, 5 = nuanced/scenario-based). At every difficulty level, wrong options must be genuinely plausible -- not throwaway distractors -- since real exam feedback on this cert found the actual exam's options frequently very close together. At difficulty 4-5 specifically, make the options nearly tied: more than one may seem individually defensible, but exactly one is the MOST correct per the exam content, and feedback_md must explain precisely why that one edges out the other close options.
 {style_instruction}
 {avoid_instruction}
-Two common mistakes to avoid:
+Three common mistakes to avoid:
 1. Do NOT make the correct option(s) noticeably longer or more detailed than the wrong ones -- keep every option's length and level of detail roughly similar, so length itself is never a clue to the answer.
 2. Do NOT restate, list, or describe the answer options within the stem/question text itself -- the stem should present the scenario or question only. The options belong exclusively in option_keys/option_texts, never repeated or previewed in the stem.
+3. Each option_text must be SHORT: a single phrase or at most one sentence, matching real Salesforce exam options. Do NOT write multi-sentence options -- put all reasoning, context, and explanation in feedback_md instead, never in the option text itself.
 
 Ground the question in this exam content (do not invent facts outside it):
 ---
