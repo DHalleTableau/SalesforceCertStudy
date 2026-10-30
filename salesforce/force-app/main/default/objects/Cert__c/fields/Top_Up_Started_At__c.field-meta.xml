@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>Top_Up_Started_At__c</fullName>
+    <description>Lock: set while a generation job chain is running for this cert.</description>
+    <label>Top-Up Started At</label>
+    <required>false</required>
+    <type>DateTime</type>
+</CustomField>

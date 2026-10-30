@@ -10,6 +10,11 @@ Prompt Template generates -> custom objects hold the queue/state -> Agentforce
 (or Flow-backed Slack app) serves and grades -> Data 360 holds exam-guide
 corpus + analytics.
 
+**Status:** Steps 1-3 are built as an SFDX project in `salesforce/`. Deploy,
+data-load and Agent Builder steps are in `salesforce/README.md`. The interface
+for now is Agent Builder preview, then the Slack demo org with testers added as
+users there. Internal Slack comes later.
+
 ## Pass/fail questions
 
 | # | Question | Pass | Fail fallback |

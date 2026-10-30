@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<PermissionSet xmlns="http://soap.sforce.com/2006/04/metadata">
+    <classAccesses>
+        <apexClass>CertStudy_FindCerts</apexClass>
+        <enabled>true</enabled>
+    </classAccesses>
+    <classAccesses>
+        <apexClass>CertStudy_StartSession</apexClass>
+        <enabled>true</enabled>
+    </classAccesses>
+    <classAccesses>
+        <apexClass>CertStudy_NextQuestion</apexClass>
+        <enabled>true</enabled>
+    </classAccesses>
+    <classAccesses>
+        <apexClass>CertStudy_SubmitAnswer</apexClass>
+        <enabled>true</enabled>
+    </classAccesses>
+    <classAccesses>
+        <apexClass>CertStudy_SessionSummary</apexClass>
+        <enabled>true</enabled>
+    </classAccesses>
+    <description>Learners: lets the agent run the Cert Study actions. Data access happens in Apex system mode.</description>
+    <hasActivationRequired>false</hasActivationRequired>
+    <label>Cert Study User</label>
+</PermissionSet>

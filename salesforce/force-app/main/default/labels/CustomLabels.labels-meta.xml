@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomLabels xmlns="http://soap.sforce.com/2006/04/metadata">
+    <labels>
+        <fullName>CertStudy_Model</fullName>
+        <language>en_US</language>
+        <protected>false</protected>
+        <shortDescription>Cert Study generation model</shortDescription>
+        <value>sfdc_ai__DefaultBedrockAnthropicClaude4Sonnet</value>
+    </labels>
+</CustomLabels>
