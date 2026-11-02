@@ -578,3 +578,36 @@ fallback for "any employee, no manual provisioning."
   `formatQuestion`.
 - **Builder save bug.** Saving while the Preview tab was active threw "[Agent definition model not found]
   markup://agent_authoring:modelManager", and a page reload didn't fix it. Saving from the Agent Definition tab works.
+
+## Nov 2, 2026 (later): data-quality cleanup, question mix, in-org Lightning app
+
+- **Live Test feedback surfaced data problems, not code problems.** Answering "A" every time scored 5/5,
+  because in the 301 migrated Heroku questions A was correct 257 times: most predated option shuffling. The
+  longest option was also correct in 163 of 237 single-answer questions. All unused migrated questions (295)
+  were marked `Retired`, a new Status value, which is reversible (`scripts/retire_migrated.apex`). The pool
+  now refills only with newly generated, shuffled, length-checked questions.
+- **The agent graded several questions off one reply** (it skipped from Q2 to Q6). It re-called SubmitAnswer
+  because the action's message ended with the next question. Fixed in two layers:
+  - the v2 instructions say "at most once per user message";
+  - a server-side guard ignores an identical answer within 10s. The guard compares against all answers in the
+    window, because same-second rows have no reliable order (that bug showed up in a test).
+
+  The Lightning page bypasses the guard (`gradeCore(..., false)`), since it prevents double-submits itself
+  and a fast learner repeating a letter must never be silently ignored.
+- **Question mix:**
+  - formats: 50% 3-option (`single3`, a new format value), 40% 4-option, 10% multi-select. Many Salesforce exams default to 3 options;
+  - topics follow each exam's official domain weights, using a smooth weighted round-robin over a 20-slot cycle;
+  - question picks prefer a different cert and recent-unseen domains.
+- **Identity:** Live Test stored sessions as `noreply@salesforce.com` (the agent user), so all agent learners
+  would share one session. The planned fix is to bind `userKey` to the `EndUserId` context variable; it must
+  be verified on Slack.
+- **Why a Lightning app instead of embedding the agent in a page:** an embedded chat still auto-scrolls past
+  the explanation. A dedicated LWC keeps the explanation visible until Next, has real answer buttons and
+  multi-select, and runs no agent turns, so the only credit use is background generation. `CertStudyService`
+  was refactored into structured "core" methods shared by the LWC controller and the agent's markdown
+  actions, so both behave identically.
+- **Test mode spec agreed** (not built yet):
+  - one cert, the real exam's question count;
+  - no feedback until the end; then PASS/FAIL, a per-domain breakdown and a review of misses;
+  - ending early is a hybrid: unanswered questions count as wrong officially, plus a score on the answered questions with per-section "likely would/wouldn't have passed" notes and recommendations;
+  - the user picks a strict timer or open time, and pause hides the current question.

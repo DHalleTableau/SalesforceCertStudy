@@ -42,9 +42,22 @@ public without sharing class CertStudyGenerator {
         return Math.mod(total, 5) + 1;
     }
 
-    /** Every 6th question is multi-select. */
+    /**
+     * 10-slot mix: 5 x three-option single ('single3'), 4 x four-option
+     * single ('single'), 1 x multi-select. Many Salesforce exams default to
+     * three options, so that is the most common format.
+     */
     public static String nextFormat(Integer total) {
-        return Math.mod(total, 6) == 5 ? 'multi' : 'single';
+        Integer slot = Math.mod(total, 10);
+        if (slot == 9) return 'multi';
+        if (slot == 1 || slot == 4 || slot == 6 || slot == 8) return 'single';
+        return 'single3';
+    }
+
+    public static Integer optionCount(String format) {
+        if (format == 'single3') return 3;
+        if (format == 'multi') return 5;
+        return 4;
     }
 
     /** 8-slot cycle: 5 terminology + one each of three scenario flavors. */
@@ -56,11 +69,50 @@ public without sharing class CertStudyGenerator {
         return 'terminology';
     }
 
-    /** Round-robin through the cert's derived domains; null = model chooses. */
+    public static final Integer DOMAIN_CYCLE_LENGTH = 20;
+
+    /**
+     * Domain for the Nth generated question, following the exam's official
+     * weights (a 35% domain gets ~7 of every 20 questions), interleaved so
+     * the same domain doesn't come up in long runs. Null = model chooses.
+     */
     public static String nextDomain(Cert__c cert, Integer total) {
-        List<Map<String, Object>> doms = domains(cert);
-        if (doms.isEmpty()) return null;
-        return String.valueOf(doms[Math.mod(total, doms.size())].get('name'));
+        List<String> seq = weightedDomainSequence(domains(cert), DOMAIN_CYCLE_LENGTH);
+        if (seq.isEmpty()) return null;
+        return seq[Math.mod(total, seq.size())];
+    }
+
+    /** Smooth weighted round-robin; missing/zero weights count as 1. */
+    public static List<String> weightedDomainSequence(List<Map<String, Object>> doms, Integer length) {
+        List<String> seq = new List<String>();
+        if (doms == null || doms.isEmpty()) return seq;
+        List<String> names = new List<String>();
+        List<Decimal> weights = new List<Decimal>();
+        Decimal sumW = 0;
+        for (Map<String, Object> d : doms) {
+            Decimal w = 1;
+            try {
+                if (d.get('weight_pct') != null) w = Decimal.valueOf(String.valueOf(d.get('weight_pct')));
+            } catch (Exception e) {
+                w = 1;
+            }
+            if (w <= 0) w = 1;
+            names.add(String.valueOf(d.get('name')));
+            weights.add(w);
+            sumW += w;
+        }
+        List<Decimal> current = new List<Decimal>();
+        for (Integer i = 0; i < names.size(); i++) current.add(0);
+        for (Integer step = 0; step < length; step++) {
+            Integer best = 0;
+            for (Integer i = 0; i < names.size(); i++) {
+                current[i] = current[i] + weights[i];
+                if (current[i] > current[best]) best = i;
+            }
+            current[best] = current[best] - sumW;
+            seq.add(names[best]);
+        }
+        return seq;
     }
 
     public static List<Map<String, Object>> domains(Cert__c cert) {
@@ -121,10 +173,15 @@ public without sharing class CertStudyGenerator {
         String certName, String domain, Integer difficulty, String format,
         String style, String grounding, List<String> avoidStems
     ) {
-        Integer numOptions = format == 'single' ? 4 : 5;
-        String formatInstruction = format == 'single'
-            ? 'This must be a SINGLE-select question: EXACTLY 4 options, EXACTLY 1 correct answer. Not 3, not 5 -- exactly 4 options.'
-            : 'This must be a MULTI-select question: EXACTLY 5 options, EXACTLY 2 or 3 correct answers (graded all-or-nothing). Not 4, not 6 -- exactly 5 options.';
+        Integer numOptions = optionCount(format);
+        String formatInstruction;
+        if (format == 'single3') {
+            formatInstruction = 'This must be a SINGLE-select question: EXACTLY 3 options, EXACTLY 1 correct answer. Not 2, not 4 -- exactly 3 options.';
+        } else if (format == 'single') {
+            formatInstruction = 'This must be a SINGLE-select question: EXACTLY 4 options, EXACTLY 1 correct answer. Not 3, not 5 -- exactly 4 options.';
+        } else {
+            formatInstruction = 'This must be a MULTI-select question: EXACTLY 5 options, EXACTLY 2 or 3 correct answers (graded all-or-nothing). Not 4, not 6 -- exactly 5 options.';
+        }
         String domainInstruction = String.isNotBlank(domain)
             ? 'Focus specifically on the domain/category: ' + domain + '.'
             : 'Choose an appropriate domain from the grounding content below.';
@@ -276,12 +333,12 @@ public without sharing class CertStudyGenerator {
 
     /** Null if valid except possibly length bias; else the rejection reason. */
     public static String structuralReason(GeneratedQuestion q) {
-        Integer expected = q.format == 'single' ? 4 : 5;
+        Integer expected = optionCount(q.format);
         if (q.rawOptionCount != expected || q.optionKeys.size() != expected) {
             return 'expected ' + expected + ' options, got ' + q.rawOptionCount;
         }
-        Integer minC = q.format == 'single' ? 1 : 2;
-        Integer maxC = q.format == 'single' ? 1 : 3;
+        Integer minC = q.format == 'multi' ? 2 : 1;
+        Integer maxC = q.format == 'multi' ? 3 : 1;
         if (q.correct.size() < minC || q.correct.size() > maxC) {
             return 'expected ' + minC + '-' + maxC + ' correct, got ' + q.correct.size();
         }

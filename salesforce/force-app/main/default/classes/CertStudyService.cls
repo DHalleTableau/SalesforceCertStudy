@@ -17,6 +17,9 @@
 public without sharing class CertStudyService {
     public static final String ACTIVE = 'Active';
     public static final String ENDED = 'Ended';
+    /** Agents sometimes re-call SubmitAnswer in one turn; identical answers this close together are ignored. */
+    public static final Integer DUPLICATE_WINDOW_SECONDS = 10;
+    public static final String DUPLICATE_PREFIX = 'DUPLICATE_IGNORED';
 
     // ------------------------------------------------------------- identity
 
@@ -115,10 +118,47 @@ public without sharing class CertStudyService {
     }
 
     // -------------------------------------------------------------- session
+    //
+    // "Core" methods return structured results and are shared by the Lightning
+    // app (CertStudyController) and the agent actions; the String methods
+    // below them format those results as markdown for the chat agent.
 
-    public static String startSession(String userKey, String certCodesText, String prereqAnswersText) {
-        String key = resolveUserKey(userKey);
+    public class StartOutcome {
+        public String error;
+        public String pendingCode;
+        public String pendingCertName;
+        public List<String> pendingPrereqNames = new List<String>();
+        public Study_Session__c session;
+        public List<Cert__c> certs = new List<Cert__c>();
+    }
 
+    public class GradeOutcome {
+        public String status; // ok | duplicate | noQuestion | invalid
+        public Question__c question;
+        public List<String> chosen = new List<String>();
+        public List<String> correct = new List<String>();
+        public Boolean isCorrect = false;
+        public Integer answered = 0;
+        public Integer right = 0;
+    }
+
+    public class AreaStat {
+        public String certName;
+        public String domain;
+        public Integer right = 0;
+        public Integer total = 0;
+        public Integer pct() { return CertStudyService.pct(right, total); }
+    }
+
+    public class SummaryData {
+        public Study_Session__c session;
+        public Integer answered = 0;
+        public Integer right = 0;
+        public List<AreaStat> areas = new List<AreaStat>(); // weakest first
+        public List<Answer__c> missed = new List<Answer__c>();
+    }
+
+    private static Map<String, Cert__c> certsByUpperCode() {
         Map<String, Cert__c> certsByCode = new Map<String, Cert__c>();
         for (Cert__c c : [
             SELECT Id, Name, Cert_Code__c, Is_Aggregate__c, Duration_Min__c, Num_Questions__c,
@@ -127,11 +167,18 @@ public without sharing class CertStudyService {
         ]) {
             certsByCode.put(c.Cert_Code__c.toUpperCase(), c);
         }
+        return certsByCode;
+    }
+
+    public static StartOutcome startSessionCore(String key, List<String> requestedCodes, Map<String, Boolean> answers) {
+        StartOutcome out = new StartOutcome();
+        Map<String, Cert__c> certsByCode = certsByUpperCode();
 
         List<String> selected = new List<String>();
         List<String> unknown = new List<String>();
-        for (String token : splitList(certCodesText)) {
-            String code = token.toUpperCase();
+        for (String token : requestedCodes == null ? new List<String>() : requestedCodes) {
+            if (String.isBlank(token)) continue;
+            String code = token.trim().toUpperCase();
             if (certsByCode.containsKey(code)) {
                 if (!selected.contains(code)) selected.add(code);
             } else {
@@ -139,36 +186,40 @@ public without sharing class CertStudyService {
             }
         }
         if (!unknown.isEmpty() || selected.isEmpty()) {
-            return 'I could not find these certification codes: ' + String.join(unknown, ', ')
+            out.error = 'I could not find these certification codes: ' + String.join(unknown, ', ')
                 + '. Use Find Certifications to look up the exact code.';
+            return out;
         }
 
-        Resolution res = resolveCerts(selected, parseAnswers(prereqAnswersText));
+        Resolution res = resolveCerts(selected, answers == null ? new Map<String, Boolean>() : answers);
         if (res.pendingPrompt != null) {
             Cert__c c = certsByCode.get(res.pendingPrompt);
-            List<String> names = new List<String>();
+            out.pendingCode = res.pendingPrompt;
+            out.pendingCertName = c.Name;
             for (Cert_Prerequisite__c e : [
                 SELECT Prereq_Cert__r.Name FROM Cert_Prerequisite__c WHERE Cert__c = :c.Id
             ]) {
-                names.add(e.Prereq_Cert__r.Name);
+                out.pendingPrereqNames.add(e.Prereq_Cert__r.Name);
             }
-            return 'NEEDS_ANSWER (' + res.pendingPrompt + '): ' + c.Name + ' has prerequisite certifications: '
-                + String.join(names, ', ') + '. Should questions on those prerequisites be included too? (yes/no)';
+            return out;
         }
 
         List<String> codes = new List<String>(res.resolved);
         codes.sort();
         List<String> ids = new List<String>();
         for (String code : codes) {
-            if (certsByCode.containsKey(code)) ids.add(String.valueOf(certsByCode.get(code).Id));
+            if (certsByCode.containsKey(code)) {
+                ids.add(String.valueOf(certsByCode.get(code).Id));
+                out.certs.add(certsByCode.get(code));
+            }
         }
         String delimited = ';' + String.join(ids, ';') + ';';
         if (delimited.length() > 255) {
-            return 'That selection expands to too many certifications for one session. Please pick fewer.';
+            out.error = 'That selection expands to too many certifications for one session. Please pick fewer.';
+            return out;
         }
 
         endSessions([SELECT Id FROM Study_Session__c WHERE User_Key__c = :key AND Status__c = :ACTIVE]);
-
         Study_Session__c s = new Study_Session__c(
             User_Key__c = key,
             Cert_Codes__c = delimited,
@@ -178,10 +229,153 @@ public without sharing class CertStudyService {
         );
         insert s;
         CertStudyPoolJob.requestTopUp(new Set<String>(codes));
+        out.session = s;
+        return out;
+    }
+
+    /** The unanswered question if any, else claims the next Ready row; null = still generating. */
+    public static Question__c nextQuestionRecord(Study_Session__c s) {
+        Question__c current = currentQuestion(s.Id);
+        if (current != null) return current;
+        Set<String> codes = sessionCodes(s);
+        Question__c claimed = claimFromPool(s.Id, codes);
+        CertStudyPoolJob.requestTopUp(codes);
+        return claimed;
+    }
+
+    public static GradeOutcome gradeCore(Study_Session__c s, List<String> chosen) {
+        return gradeCore(s, chosen, true);
+    }
+
+    /**
+     * guardDuplicates: the chat agent sometimes re-calls SubmitAnswer within one
+     * turn, so it ignores an identical answer seconds after the last one. The
+     * Lightning page prevents double-submits itself and passes false, so a fast
+     * learner picking the same letter twice in a row is never silently ignored.
+     */
+    public static GradeOutcome gradeCore(Study_Session__c s, List<String> chosen, Boolean guardDuplicates) {
+        GradeOutcome out = new GradeOutcome();
+        out.chosen = chosen == null ? new List<String>() : chosen;
+
+        // Compare against every answer in the window, not just the latest: answers
+        // in the same second have no reliable order.
+        DateTime windowStart = DateTime.now().addSeconds(-DUPLICATE_WINDOW_SECONDS);
+        String chosenKey = String.join(out.chosen, ',');
+        if (guardDuplicates && !out.chosen.isEmpty()) {
+            for (Answer__c recent : [
+                SELECT User_Answer__c FROM Answer__c
+                WHERE Study_Session__c = :s.Id AND Answered_At__c >= :windowStart
+            ]) {
+                if (recent.User_Answer__c == chosenKey) {
+                    out.status = 'duplicate';
+                    return out;
+                }
+            }
+        }
+        Question__c q = currentQuestion(s.Id);
+        if (q == null) {
+            out.status = 'noQuestion';
+            return out;
+        }
+        out.question = q;
+        Set<String> validKeys = new Set<String>();
+        for (Map<String, String> o : options(q)) validKeys.add(o.get('key'));
+        if (out.chosen.isEmpty() || !validKeys.containsAll(out.chosen)) {
+            out.status = 'invalid';
+            return out;
+        }
+
+        out.correct = correctKeys(q);
+        out.isCorrect = new Set<String>(out.chosen).equals(new Set<String>(out.correct));
+        insert new Answer__c(
+            Study_Session__c = s.Id,
+            Question__c = q.Id,
+            User_Answer__c = chosenKey,
+            Is_Correct__c = out.isCorrect,
+            Answered_At__c = DateTime.now()
+        );
+        q.Status__c = 'Answered';
+        update q;
+        s.Last_Activity__c = DateTime.now();
+        update s;
+
+        out.answered = [SELECT COUNT() FROM Answer__c WHERE Study_Session__c = :s.Id];
+        out.right = [SELECT COUNT() FROM Answer__c WHERE Study_Session__c = :s.Id AND Is_Correct__c = true];
+        out.status = 'ok';
+        return out;
+    }
+
+    /** Most recent session for the user (active first by recency); null if none. */
+    public static Study_Session__c latestSession(String key) {
+        List<Study_Session__c> sessions = [
+            SELECT Id, Cert_Codes__c, Status__c, Started_At__c
+            FROM Study_Session__c
+            WHERE User_Key__c = :key
+            ORDER BY Started_At__c DESC
+            LIMIT 1
+        ];
+        return sessions.isEmpty() ? null : sessions[0];
+    }
+
+    public static SummaryData summaryCore(Study_Session__c s, Boolean endIt) {
+        SummaryData out = new SummaryData();
+        out.session = s;
+        Map<String, AreaStat> byArea = new Map<String, AreaStat>();
+        for (Answer__c a : [
+            SELECT Is_Correct__c, User_Answer__c, Question__r.Stem__c, Question__r.Domain__c,
+                Question__r.Correct_JSON__c, Question__r.Options_JSON__c, Question__r.Feedback_MD__c,
+                Question__r.Cert__r.Name
+            FROM Answer__c
+            WHERE Study_Session__c = :s.Id
+            ORDER BY Answered_At__c
+        ]) {
+            out.answered++;
+            if (a.Is_Correct__c) out.right++;
+            String areaKey = a.Question__r.Cert__r.Name + '|' + (a.Question__r.Domain__c == null ? '' : a.Question__r.Domain__c);
+            if (!byArea.containsKey(areaKey)) {
+                AreaStat st = new AreaStat();
+                st.certName = a.Question__r.Cert__r.Name;
+                st.domain = a.Question__r.Domain__c;
+                byArea.put(areaKey, st);
+            }
+            AreaStat st = byArea.get(areaKey);
+            st.total++;
+            if (a.Is_Correct__c) {
+                st.right++;
+            } else {
+                out.missed.add(a);
+            }
+        }
+        // weakest first: zero-padded percentage sort key
+        Map<String, AreaStat> sorted = new Map<String, AreaStat>();
+        for (String k : byArea.keySet()) {
+            AreaStat st = byArea.get(k);
+            sorted.put(String.valueOf(st.pct()).leftPad(3, '0') + '|' + k, st);
+        }
+        List<String> keys = new List<String>(sorted.keySet());
+        keys.sort();
+        for (String k : keys) out.areas.add(sorted.get(k));
+
+        if (endIt && s.Status__c == ACTIVE) {
+            endSessions(new List<Study_Session__c>{ s });
+            s.Status__c = ENDED;
+        }
+        return out;
+    }
+
+    // ------------------------------------------------- agent (markdown) API
+
+    public static String startSession(String userKey, String certCodesText, String prereqAnswersText) {
+        String key = resolveUserKey(userKey);
+        StartOutcome res = startSessionCore(key, splitList(certCodesText), parseAnswers(prereqAnswersText));
+        if (res.error != null) return res.error;
+        if (res.pendingCode != null) {
+            return 'NEEDS_ANSWER (' + res.pendingCode + '): ' + res.pendingCertName + ' has prerequisite certifications: '
+                + String.join(res.pendingPrereqNames, ', ') + '. Should questions on those prerequisites be included too? (yes/no)';
+        }
 
         List<String> lines = new List<String>{ '**Practice session started.**', '' };
-        for (String code : codes) {
-            Cert__c c = certsByCode.get(code);
+        for (Cert__c c : res.certs) {
             if (c.Is_Aggregate__c) {
                 lines.add('- **' + c.Name + '** (credential earned via its prerequisites)');
                 continue;
@@ -200,7 +394,7 @@ public without sharing class CertStudyService {
             lines.add('');
         }
         lines.add('');
-        lines.add(serveNext(s));
+        lines.add(serveNext(res.session));
         return String.join(lines, '\n');
     }
 
@@ -214,46 +408,23 @@ public without sharing class CertStudyService {
         Study_Session__c s = activeSession(resolveUserKey(userKey));
         if (s == null) return noSessionMessage();
 
-        Question__c q = currentQuestion(s.Id);
-        if (q == null) {
-            return 'There is no question waiting for an answer.\n\n' + serveNext(s);
+        GradeOutcome g = gradeCore(s, parseLetters(answerText));
+        if (g.status == 'duplicate') {
+            return DUPLICATE_PREFIX + ': this answer was already recorded moments ago. Do not show this to the learner; wait for their next reply.';
         }
-
-        List<String> chosen = parseLetters(answerText);
-        Set<String> validKeys = new Set<String>();
-        for (Map<String, String> o : options(q)) validKeys.add(o.get('key'));
-        if (chosen.isEmpty() || !validKeys.containsAll(chosen)) {
-            return 'Please answer with the option letter(s) shown, for example "B" or "B, D".';
-        }
-
-        List<String> correct = correctKeys(q);
-        Boolean isCorrect = new Set<String>(chosen).equals(new Set<String>(correct));
-
-        insert new Answer__c(
-            Study_Session__c = s.Id,
-            Question__c = q.Id,
-            User_Answer__c = String.join(chosen, ','),
-            Is_Correct__c = isCorrect,
-            Answered_At__c = DateTime.now()
-        );
-        q.Status__c = 'Answered';
-        update q;
-        s.Last_Activity__c = DateTime.now();
-        update s;
-
-        Integer total = [SELECT COUNT() FROM Answer__c WHERE Study_Session__c = :s.Id];
-        Integer right = [SELECT COUNT() FROM Answer__c WHERE Study_Session__c = :s.Id AND Is_Correct__c = true];
+        if (g.status == 'noQuestion') return 'There is no question waiting for an answer.\n\n' + serveNext(s);
+        if (g.status == 'invalid') return 'Please answer with the option letter(s) shown, for example "B" or "B, D".';
 
         List<String> lines = new List<String>();
-        lines.add(isCorrect
+        lines.add(g.isCorrect
             ? '✅ **Correct!**'
-            : '❌ **Not quite.** You chose ' + String.join(chosen, ', ') + '; the correct answer is ' + String.join(correct, ', ') + '.');
+            : '❌ **Not quite.** You chose ' + String.join(g.chosen, ', ') + '; the correct answer is ' + String.join(g.correct, ', ') + '.');
         lines.add('');
-        lines.add('Score so far: ' + right + '/' + total + ' (' + pct(right, total) + '%)');
+        lines.add('Score so far: ' + g.right + '/' + g.answered + ' (' + pct(g.right, g.answered) + '%)');
         lines.add('');
         lines.add('**Explanation**');
         lines.add('');
-        lines.add(q.Feedback_MD__c);
+        lines.add(g.question.Feedback_MD__c);
         lines.add('');
         lines.add('---');
         lines.add('');
@@ -262,68 +433,32 @@ public without sharing class CertStudyService {
     }
 
     public static String sessionSummary(String userKey, Boolean endIt) {
-        String key = resolveUserKey(userKey);
-        List<Study_Session__c> sessions = [
-            SELECT Id, Cert_Codes__c, Status__c, Started_At__c
-            FROM Study_Session__c
-            WHERE User_Key__c = :key
-            ORDER BY Started_At__c DESC
-            LIMIT 1
-        ];
-        if (sessions.isEmpty()) return 'You have no practice sessions yet. ' + noSessionMessage();
-        Study_Session__c s = sessions[0];
-
-        List<Answer__c> answers = [
-            SELECT Is_Correct__c, User_Answer__c, Question__r.Stem__c, Question__r.Domain__c,
-                Question__r.Correct_JSON__c, Question__r.Options_JSON__c, Question__r.Cert__r.Name
-            FROM Answer__c
-            WHERE Study_Session__c = :s.Id
-            ORDER BY Answered_At__c
-        ];
-
-        Integer right = 0;
-        Map<String, Integer[]> byArea = new Map<String, Integer[]>(); // area -> [right, total]
-        List<String> missed = new List<String>();
-        for (Answer__c a : answers) {
-            if (a.Is_Correct__c) right++;
-            String area = a.Question__r.Cert__r.Name
-                + (String.isBlank(a.Question__r.Domain__c) ? '' : ' / ' + a.Question__r.Domain__c);
-            if (!byArea.containsKey(area)) byArea.put(area, new Integer[]{ 0, 0 });
-            Integer[] counts = byArea.get(area);
-            if (a.Is_Correct__c) counts[0] = counts[0] + 1;
-            counts[1] = counts[1] + 1;
-            if (!a.Is_Correct__c && missed.size() < 10) {
-                missed.add('- ' + a.Question__r.Stem__c.abbreviate(200) + '\n  Correct: '
-                    + describeKeys(a.Question__r.Options_JSON__c, a.Question__r.Correct_JSON__c)
-                    + ' | You chose: ' + a.User_Answer__c);
-            }
-        }
-
-        if (endIt && s.Status__c == ACTIVE) {
-            endSessions(new List<Study_Session__c>{ s });
-        }
+        Study_Session__c s = latestSession(resolveUserKey(userKey));
+        if (s == null) return 'You have no practice sessions yet. ' + noSessionMessage();
+        SummaryData d = summaryCore(s, endIt);
 
         List<String> lines = new List<String>();
         lines.add('**Session summary**' + (endIt ? ' (session ended)' : ''));
         lines.add('');
-        lines.add('Answered: ' + answers.size() + ' | Correct: ' + right + ' (' + pct(right, answers.size()) + '%)');
-        if (!byArea.isEmpty()) {
-            List<String> areaLines = new List<String>();
-            for (String area : byArea.keySet()) {
-                Integer[] c = byArea.get(area);
-                // zero-padded sort key so a plain string sort puts the weakest first
-                areaLines.add(String.valueOf(pct(c[0], c[1])).leftPad(3, '0') + '|'
-                    + pct(c[0], c[1]) + '% -- ' + area + ' (' + c[0] + '/' + c[1] + ')');
-            }
-            areaLines.sort();
+        lines.add('Answered: ' + d.answered + ' | Correct: ' + d.right + ' (' + pct(d.right, d.answered) + '%)');
+        if (!d.areas.isEmpty()) {
             lines.add('');
             lines.add('**By area (weakest first)**');
-            for (String l : areaLines) lines.add('- ' + l.substringAfter('|'));
+            for (AreaStat st : d.areas) {
+                String area = st.certName + (String.isBlank(st.domain) ? '' : ' / ' + st.domain);
+                lines.add('- ' + st.pct() + '% -- ' + area + ' (' + st.right + '/' + st.total + ')');
+            }
         }
-        if (!missed.isEmpty()) {
+        if (!d.missed.isEmpty()) {
             lines.add('');
             lines.add('**Questions to review**');
-            lines.addAll(missed);
+            Integer shown = 0;
+            for (Answer__c a : d.missed) {
+                if (shown++ >= 10) break;
+                lines.add('- ' + a.Question__r.Stem__c.abbreviate(200) + '\n  Correct: '
+                    + describeKeys(a.Question__r.Options_JSON__c, a.Question__r.Correct_JSON__c)
+                    + ' | You chose: ' + a.User_Answer__c);
+            }
         }
         return String.join(lines, '\n');
     }
@@ -357,7 +492,7 @@ public without sharing class CertStudyService {
         return codesForSessions([SELECT Cert_Codes__c FROM Study_Session__c WHERE Status__c = :ACTIVE]);
     }
 
-    private static Study_Session__c activeSession(String key) {
+    public static Study_Session__c activeSession(String key) {
         List<Study_Session__c> rows = [
             SELECT Id, Cert_Codes__c, Status__c FROM Study_Session__c
             WHERE User_Key__c = :key AND Status__c = :ACTIVE
@@ -369,7 +504,7 @@ public without sharing class CertStudyService {
     private static Question__c currentQuestion(Id sessionId) {
         List<Question__c> rows = [
             SELECT Id, Stem__c, Options_JSON__c, Correct_JSON__c, Feedback_MD__c, Domain__c,
-                Difficulty__c, Format__c, Cert__r.Name
+                Difficulty__c, Format__c, Cert__c, Cert__r.Name
             FROM Question__c
             WHERE Study_Session__c = :sessionId AND Status__c = 'Served'
             ORDER BY Served_At__c DESC LIMIT 1
@@ -379,12 +514,7 @@ public without sharing class CertStudyService {
 
     /** Re-shows the unanswered question if there is one; otherwise claims the next Ready row. */
     private static String serveNext(Study_Session__c s) {
-        Question__c current = currentQuestion(s.Id);
-        if (current != null) return formatQuestion(current, s.Id);
-
-        Set<String> codes = sessionCodes(s);
-        Question__c claimed = claimFromPool(s.Id, codes);
-        CertStudyPoolJob.requestTopUp(codes);
+        Question__c claimed = nextQuestionRecord(s);
         if (claimed == null) {
             return '⏳ Your next question is still being generated (usually under a minute). Ask me for the next question again shortly.';
         }
@@ -392,21 +522,40 @@ public without sharing class CertStudyService {
     }
 
     /**
-     * SOQL locking cannot be combined with ORDER BY, so: read a batch of the
-     * oldest candidates, shuffle (mixes certs in multi-cert sessions), then
-     * lock-and-recheck one at a time until a claim succeeds.
+     * Picks randomly across the whole Ready pool (not just the oldest rows),
+     * preferring domains not seen in the session's last few questions, so a
+     * session mixes topics. SOQL locking cannot be combined with ORDER BY, so
+     * candidates are shuffled in Apex, then lock-and-rechecked one at a time.
      */
     private static Question__c claimFromPool(Id sessionId, Set<String> codes) {
-        List<Question__c> candidates = [
-            SELECT Id FROM Question__c
+        Set<String> recentDomains = new Set<String>();
+        Id lastCert = null;
+        for (Question__c r : [
+            SELECT Domain__c, Cert__c FROM Question__c
+            WHERE Study_Session__c = :sessionId ORDER BY Served_At__c DESC LIMIT 3
+        ]) {
+            if (lastCert == null) lastCert = r.Cert__c;
+            if (String.isNotBlank(r.Domain__c)) recentDomains.add(r.Domain__c);
+        }
+        // Buckets, best first: new cert + new domain, new domain, new cert, neither.
+        // In multi-cert sessions this rotates between certs; within a cert it mixes domains.
+        List<List<Question__c>> buckets = new List<List<Question__c>>{
+            new List<Question__c>(), new List<Question__c>(), new List<Question__c>(), new List<Question__c>()
+        };
+        for (Question__c c : [
+            SELECT Id, Domain__c, Cert__c FROM Question__c
             WHERE Study_Session__c = null AND Status__c = 'Ready' AND Cert__r.Cert_Code__c IN :codes
-            ORDER BY CreatedDate LIMIT 20
-        ];
-        for (Integer i = candidates.size() - 1; i > 0; i--) {
-            Integer j = (Integer) Math.floor(Math.random() * (i + 1));
-            Question__c tmp = candidates[i];
-            candidates[i] = candidates[j];
-            candidates[j] = tmp;
+            LIMIT 200
+        ]) {
+            Boolean sameCert = lastCert != null && c.Cert__c == lastCert;
+            Boolean sameDomain = String.isNotBlank(c.Domain__c) && recentDomains.contains(c.Domain__c);
+            Integer idx = sameCert ? (sameDomain ? 3 : 1) : (sameDomain ? 2 : 0);
+            buckets[idx].add(c);
+        }
+        List<Question__c> candidates = new List<Question__c>();
+        for (List<Question__c> b : buckets) {
+            shuffleRecords(b);
+            candidates.addAll(b);
         }
         for (Question__c c : candidates) {
             List<Question__c> locked = [
@@ -423,6 +572,15 @@ public without sharing class CertStudyService {
             return currentQuestion(sessionId);
         }
         return null;
+    }
+
+    private static void shuffleRecords(List<Question__c> items) {
+        for (Integer i = items.size() - 1; i > 0; i--) {
+            Integer j = (Integer) Math.floor(Math.random() * (i + 1));
+            Question__c tmp = items[i];
+            items[i] = items[j];
+            items[j] = tmp;
+        }
     }
 
     private static String formatQuestion(Question__c q, Id sessionId) {
@@ -446,7 +604,7 @@ public without sharing class CertStudyService {
         return String.join(lines, '\n');
     }
 
-    private static List<Map<String, String>> options(Question__c q) {
+    public static List<Map<String, String>> options(Question__c q) {
         List<Map<String, String>> out = new List<Map<String, String>>();
         for (Object o : (List<Object>) JSON.deserializeUntyped(q.Options_JSON__c)) {
             Map<String, Object> m = (Map<String, Object>) o;
@@ -458,7 +616,7 @@ public without sharing class CertStudyService {
         return out;
     }
 
-    private static List<String> correctKeys(Question__c q) {
+    public static List<String> correctKeys(Question__c q) {
         List<String> out = new List<String>();
         for (Object o : (List<Object>) JSON.deserializeUntyped(q.Correct_JSON__c)) {
             out.add(String.valueOf(o).toUpperCase());
@@ -477,7 +635,7 @@ public without sharing class CertStudyService {
     }
 
     /** Cert_Codes__c holds ;-delimited Cert__c Ids; returns the matching cert codes. */
-    private static Set<String> sessionCodes(Study_Session__c s) {
+    public static Set<String> sessionCodes(Study_Session__c s) {
         return codesForSessions(new List<Study_Session__c>{ s });
     }
 
@@ -499,7 +657,7 @@ public without sharing class CertStudyService {
         return 'You have no active practice session. Tell me which certification you want to practice and I will start one.';
     }
 
-    private static Integer pct(Integer part, Integer whole) {
+    public static Integer pct(Integer part, Integer whole) {
         if (whole == null || whole == 0) return 0;
         return (Integer) Math.round(100.0 * part / whole);
     }

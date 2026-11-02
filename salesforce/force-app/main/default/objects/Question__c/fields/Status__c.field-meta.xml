@@ -23,6 +23,11 @@
                 <default>false</default>
                 <label>Answered</label>
             </value>
+            <value>
+                <fullName>Retired</fullName>
+                <default>false</default>
+                <label>Retired</label>
+            </value>
         </valueSetDefinition>
     </valueSet>
 </CustomField>

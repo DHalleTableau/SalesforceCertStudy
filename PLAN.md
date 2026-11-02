@@ -42,7 +42,22 @@ edits files and checks Apex syntax in the sandbox with `prettier-plugin-apex@1.1
 - **Agent:** built in the NEW Agentforce Builder. Full state, gotchas, every Optimizer prompt used, and the retest script are in **`salesforce/AGENT_SETUP.md`**. In short:
   - The actions are wired up, and Find Certs → Start Session work in Live Test.
   - Answer handling (a reply of "A" → Submit) was fixed by the Optimizer and saved; it hasn't been retested.
+- **Nov 2, later:**
+  - Agent Live Test worked well after the v2 instructions.
+  - Migrated Heroku questions retired: 295 rows, marked Retired, reversible. They were A-biased (A correct 257/301) and the longest option was usually right.
+  - New question mix: 50% 3-option, 40% 4-option, 10% multi-select.
+  - Domain-weighted generation.
+  - Cert- and domain-rotating question picks.
+  - Agent duplicate-submit guard.
+  - Built and **deployed** the in-org Lightning app (`certStudy` LWC + `CertStudyController`, `Cert_Study` tab and app). 21/21 tests pass. It has NOT been tried in the browser yet.
+  - **Test mode is next** (spec in `salesforce/README.md`).
 - **Next, in order:**
+  0. Smoke-test the Lightning app: App Launcher → **Cert Study** (open the app, not the tab).
+     - Pick a cert, then answer by click and by keyboard (A–E, Enter).
+     - Confirm the feedback stays until Next.
+     - Check the Summary.
+     - If the app is missing, re-check the CertStudy_Admin perm set or open the Cert Study tab.
+     Then build **Test mode** (spec in `salesforce/README.md`).
   1. In the builder: confirm `practice_session` has RULE 1. Send Optimizer prompt #3 if needed. Always save from the Agent Definition tab.
   2. Retest in Live Test.
   3. Identity check: is `User_Key__c` the learner's email or the agent user's? If it's the agent user, pass the end-user identity into `userKey`.

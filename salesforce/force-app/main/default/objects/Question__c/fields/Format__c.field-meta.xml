@@ -14,6 +14,11 @@
                 <label>single</label>
             </value>
             <value>
+                <fullName>single3</fullName>
+                <default>false</default>
+                <label>single3</label>
+            </value>
+            <value>
                 <fullName>multi</fullName>
                 <default>false</default>
                 <label>multi</label>

@@ -13,14 +13,15 @@ private class CertStudyTest {
                 return '{"duration_min":105,"num_questions":60,"passing_score":73,'
                     + '"domain_names":["Prompting","Agents"],"domain_weights":[40,60]}';
             }
-            return questionJson(prompt.contains('MULTI-select'), biased);
+            Integer n = prompt.contains('MULTI-select') ? 5 : (prompt.contains('EXACTLY 3 options') ? 3 : 4);
+            return questionJson(n, biased);
         }
     }
 
-    private static String questionJson(Boolean multi, Boolean biased) {
-        List<String> keys = multi
-            ? new List<String>{ 'A', 'B', 'C', 'D', 'E' }
-            : new List<String>{ 'A', 'B', 'C', 'D' };
+    private static String questionJson(Integer n, Boolean biased) {
+        Boolean multi = n == 5;
+        List<String> keys = new List<String>{ 'A', 'B', 'C', 'D', 'E' };
+        while (keys.size() > n) keys.remove(keys.size() - 1);
         List<String> texts = new List<String>();
         List<String> expl = new List<String>();
         for (String k : keys) {
@@ -55,6 +56,12 @@ private class CertStudyTest {
             new Cert_Resource__c(Cert__c = ai.Id, Role__c = 'Additional', Content__c = 'Extra notes.'),
             new Cert_Resource__c(Cert__c = found.Id, Role__c = 'Primary', Content__c = 'Foundations guide.')
         };
+    }
+
+    private static List<Map<String, Object>> toMaps(String jsonText) {
+        List<Map<String, Object>> out = new List<Map<String, Object>>();
+        for (Object o : (List<Object>) JSON.deserializeUntyped(jsonText)) out.add((Map<String, Object>) o);
+        return out;
     }
 
     private static Id certId(String code) {
@@ -206,6 +213,9 @@ private class CertStudyTest {
         Assert.isTrue(CertStudyService.startSession(key, 'AI-201', 'AI-201=no').contains('Choose 2'));
         Assert.isTrue(CertStudyService.submitAnswer(key, 'A').contains('Not quite'), 'partial is wrong');
         Assert.isTrue(CertStudyService.submitAnswer(key, 'C, A').contains('Correct!'));
+        // An agent re-calling SubmitAnswer with the same letters right away is ignored, not graded again.
+        Assert.isTrue(CertStudyService.submitAnswer(key, 'A, C').startsWith(CertStudyService.DUPLICATE_PREFIX));
+        Assert.areEqual(2, [SELECT COUNT() FROM Answer__c]);
     }
 
     @IsTest
@@ -271,9 +281,9 @@ private class CertStudyTest {
 
         Question__c q = [SELECT Status__c, Format__c, Domain__c, Options_JSON__c, Correct_JSON__c, Feedback_MD__c FROM Question__c];
         Assert.areEqual('Ready', q.Status__c);
-        Assert.areEqual('single', q.Format__c);
+        Assert.areEqual('single3', q.Format__c, 'first slot in the mix is a 3-option question');
         Assert.areEqual('Agents', q.Domain__c);
-        Assert.areEqual(4, ((List<Object>) JSON.deserializeUntyped(q.Options_JSON__c)).size());
+        Assert.areEqual(3, ((List<Object>) JSON.deserializeUntyped(q.Options_JSON__c)).size());
         Assert.isTrue(q.Feedback_MD__c.contains('-- Correct:'));
         Cert__c c = cert('AI-201');
         Assert.isNull(c.Last_Generation_Error__c);
@@ -354,21 +364,26 @@ private class CertStudyTest {
     @IsTest
     static void validationAndParsing() {
         CertStudyGenerator.GeneratedQuestion wrongCount = CertStudyGenerator.parseQuestion(
-            questionJson(true, false), 'single', 1, null, 'terminology'
+            questionJson(5, false), 'single', 1, null, 'terminology'
         );
         Assert.isTrue(CertStudyGenerator.validityReason(wrongCount).contains('expected 4 options'));
+        CertStudyGenerator.GeneratedQuestion three = CertStudyGenerator.parseQuestion(
+            questionJson(3, false), 'single3', 1, null, 'terminology'
+        );
+        Assert.isNull(CertStudyGenerator.validityReason(three));
+        Assert.areEqual(3, three.optionKeys.size());
 
         CertStudyGenerator.GeneratedQuestion garbage = CertStudyGenerator.parseQuestion('not json', 'single', 1, null, 'terminology');
         Assert.isNotNull(CertStudyGenerator.validityReason(garbage));
 
         CertStudyGenerator.GeneratedQuestion multi = CertStudyGenerator.parseQuestion(
-            questionJson(true, false), 'multi', 3, 'Agents', 'scenario-general'
+            questionJson(5, false), 'multi', 3, 'Agents', 'scenario-general'
         );
         Assert.isNull(CertStudyGenerator.validityReason(multi));
         Assert.areEqual(2, multi.correct.size());
 
         CertStudyGenerator.GeneratedQuestion biased = CertStudyGenerator.parseQuestion(
-            questionJson(false, true), 'single', 1, null, 'terminology'
+            questionJson(4, true), 'single', 1, null, 'terminology'
         );
         Assert.isTrue(CertStudyGenerator.validityReason(biased).contains('length bias'));
 
@@ -383,10 +398,19 @@ private class CertStudyTest {
         Assert.areEqual(new List<String>{ 'B', 'D' }, CertStudyService.parseLetters('bd'));
         Assert.areEqual(new List<String>{ 'A' }, CertStudyService.parseLetters('I pick A'));
 
-        Assert.areEqual('multi', CertStudyGenerator.nextFormat(5));
+        Assert.areEqual('single3', CertStudyGenerator.nextFormat(0));
+        Assert.areEqual('single', CertStudyGenerator.nextFormat(1));
+        Assert.areEqual('multi', CertStudyGenerator.nextFormat(9));
+        Assert.isTrue(CertStudyGenerator.buildQuestionPrompt('X', null, 1, 'single3', 'terminology', 'g', null).contains('EXACTLY 3 options'));
         Assert.areEqual('scenario-first-action', CertStudyGenerator.nextStyle(6));
         Assert.areEqual('scenario-root-cause', CertStudyGenerator.nextStyle(7));
         Assert.areEqual(5, CertStudyGenerator.nextDifficulty(4));
+        List<String> seq = CertStudyGenerator.weightedDomainSequence(
+            toMaps('[{"name":"Big","weight_pct":75},{"name":"Small","weight_pct":25}]'), 20
+        );
+        Integer big = 0;
+        for (String d : seq) if (d == 'Big') big++;
+        Assert.areEqual(15, big, 'weights are honoured: 75% of 20');
 
         String prompt = CertStudyGenerator.buildQuestionPrompt('X', null, 2, 'multi', 'scenario-root-cause', 'g', new List<String>{ 'old stem' });
         Assert.isTrue(prompt.contains('MULTI-select') && prompt.contains('old stem'));

@@ -1,5 +1,13 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <PermissionSet xmlns="http://soap.sforce.com/2006/04/metadata">
+    <applicationVisibilities>
+        <application>Cert_Study</application>
+        <visible>true</visible>
+    </applicationVisibilities>
+    <classAccesses>
+        <apexClass>CertStudyController</apexClass>
+        <enabled>true</enabled>
+    </classAccesses>
     <classAccesses>
         <apexClass>CertStudy_FindCerts</apexClass>
         <enabled>true</enabled>
@@ -23,4 +31,8 @@
     <description>Learners: lets the agent run the Cert Study actions. Data access happens in Apex system mode.</description>
     <hasActivationRequired>false</hasActivationRequired>
     <label>Cert Study User</label>
+    <tabSettings>
+        <tab>Cert_Study</tab>
+        <visibility>Visible</visibility>
+    </tabSettings>
 </PermissionSet>

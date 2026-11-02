@@ -15,7 +15,14 @@ The goal is unchanged: no model call ever happens in a learner's turn. Actions o
 | `worker.py` | `CertStudyPoolJob` (top-up chain, per-cert lock) + `CertStudyScheduler` (hourly safety net, ends idle sessions) |
 | `cert_resolution.py`, `app.py` routes | `CertStudyService` + 5 invocable actions (`CertStudy_*`) |
 
-## ▶ Resume here (paused Nov 2, 2026)
+## ▶ Resume here (paused Nov 2, 2026, evening)
+
+**Immediate next step:** smoke-test the in-org Lightning app; it's deployed but hasn't been opened yet.
+1. App Launcher → **Cert Study**. An active agent-preview session may make it open on a question.
+2. Answer by click and by keyboard, confirm the explanations stay until **Next question**, then check **Summary**.
+3. Report anything off. Once it's good, build Test mode (spec below).
+
+Older resume notes follow:
 
 The backend is done and verified:
 - deployed, 18/18 tests passing;
@@ -34,6 +41,19 @@ sf project deploy start --source-dir force-app --target-org certstudy | grep -E 
 ```
 
 If the CLI session expired, log in again: `sf org login web --alias certstudy --instance-url https://trailsignup-5d9fea1e5cdf7f.my.salesforce.com`
+
+**In-org app (Nov 2):** App Launcher → **Cert Study**. This is the `certStudy` LWC on the `Cert_Study` tab, backed by `CertStudyController`.
+- It's the same sessions, question pool and grading as the agent, but the explanation stays on screen until **Next**.
+- Keyboard: A–E to select, then Enter.
+- No agent turns, so the only credit use is background generation.
+- Users need the **Cert Study User** perm set and must be users in this org. Background generation runs as whoever triggered it, so learners also need Einstein generative AI access.
+
+**Test mode (designed, not built yet):**
+- One cert; the real exam's question count, drawn by domain weight.
+- No feedback until the end.
+- At the end: PASS/FAIL against the real passing score, per-domain breakdown, and review of misses.
+- Ending early: unanswered questions count as wrong for the official score. A secondary score on the answered questions comes with per-section "likely would/wouldn't have passed" notes and focus recommendations.
+- Timer: the learner chooses a strict timer (auto-ends) or open time (elapsed shown). Pause hides the current question until they resume.
 
 **Handy one-line scripts** (in `scripts/`; run with `sf apex run --file scripts/<name>.apex --target-org certstudy`):
 - `modeltest.apex`: model reachable?

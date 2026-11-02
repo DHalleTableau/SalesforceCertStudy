@@ -1,0 +1,193 @@
+<template>
+    <lightning-card title="Cert Study" icon-name="standard:education">
+        <div slot="actions">
+            <template lwc:if={inSession}>
+                <lightning-button-group>
+                    <lightning-button label="Summary" onclick={showSummary} disabled={busy}></lightning-button>
+                    <lightning-button label="End session" onclick={endSession} disabled={busy}></lightning-button>
+                </lightning-button-group>
+            </template>
+        </div>
+
+        <div class="slds-p-horizontal_medium slds-p-bottom_medium">
+            <template lwc:if={error}>
+                <div class="slds-notify slds-notify_alert slds-alert_error slds-m-bottom_small" role="alert">
+                    {error}
+                </div>
+            </template>
+
+            <!-- loading -->
+            <template lwc:if={isLoading}>
+                <div class="spinner-holder"><lightning-spinner alternative-text="Loading" size="small"></lightning-spinner></div>
+            </template>
+
+            <!-- choose certifications -->
+            <template lwc:if={isSelect}>
+                <p class="slds-text-body_regular slds-m-bottom_small">
+                    Pick one or more certifications to practice. Questions rotate between them, and you'll see
+                    whether you were right — and why — after every answer.
+                </p>
+                <lightning-input type="search" label="Search certifications" value={filterText}
+                    onchange={handleFilter} class="slds-m-bottom_small"></lightning-input>
+                <template lwc:if={selectedCount}>
+                    <div class="slds-m-bottom_small">
+                        <template for:each={selectedCerts} for:item="c">
+                            <lightning-pill key={c.code} label={c.name} name={c.code} onremove={removeCert}
+                                class="slds-m-right_xx-small"></lightning-pill>
+                        </template>
+                    </div>
+                </template>
+                <div class="cert-list slds-box slds-box_x-small">
+                    <template for:each={filteredCerts} for:item="c">
+                        <div key={c.code} class="slds-p-vertical_xx-small">
+                            <lightning-input type="checkbox" label={c.label} data-code={c.code}
+                                checked={c.checked} onchange={toggleCert}></lightning-input>
+                        </div>
+                    </template>
+                </div>
+                <div class="slds-m-top_small">
+                    <lightning-button variant="brand" label="Start practice" onclick={start}
+                        disabled={noneSelected}></lightning-button>
+                </div>
+            </template>
+
+            <!-- prerequisite question -->
+            <template lwc:if={isPrereq}>
+                <div class="slds-box slds-theme_shade">
+                    <p class="slds-text-heading_small slds-m-bottom_x-small">{pending.certName}</p>
+                    <p class="slds-m-bottom_small">
+                        This certification has prerequisites: {pending.prereqs}.
+                        Include questions on those prerequisites too?
+                    </p>
+                    <lightning-button variant="brand" label="Yes, include them" onclick={answerPrereqYes}
+                        disabled={busy} class="slds-m-right_x-small"></lightning-button>
+                    <lightning-button label="No, just this one" onclick={answerPrereqNo} disabled={busy}></lightning-button>
+                </div>
+            </template>
+
+            <!-- session header -->
+            <template lwc:if={inSession}>
+                <div class="slds-grid slds-wrap slds-grid_align-spread slds-m-bottom_small session-bar">
+                    <div class="slds-text-color_weak slds-truncate" title={sessionCertNames}>{sessionCertNames}</div>
+                    <div class="slds-text-title_bold">{scoreText}</div>
+                </div>
+            </template>
+
+            <!-- question -->
+            <template lwc:if={isQuestion}>
+                <div class="slds-text-title slds-m-bottom_x-small">Question {question.questionNumber} · {questionMeta}</div>
+                <p class="stem slds-m-bottom_medium">{question.stem}</p>
+                <div role="group" aria-label="Answer options">
+                    <template for:each={questionOptions} for:item="o">
+                        <button key={o.key} class={o.cls} data-key={o.key} onclick={selectOption} type="button">
+                            <span class="option-key">{o.key}</span>
+                            <span class="option-text">{o.text}</span>
+                        </button>
+                    </template>
+                </div>
+                <div class="slds-grid slds-grid_vertical-align-center slds-m-top_small">
+                    <lightning-button variant="brand" label="Submit answer" onclick={submit}
+                        disabled={submitDisabled}></lightning-button>
+                    <span class="slds-m-left_small slds-text-color_weak">{chooseText} Tip: press A–E, then Enter.</span>
+                </div>
+            </template>
+
+            <!-- feedback: stays on screen until Next -->
+            <template lwc:if={isFeedback}>
+                <div class={verdictClass}>
+                    <p class="slds-text-heading_small">{verdictText}</p>
+                </div>
+                <div class="slds-text-title slds-m-bottom_x-small">{gradedMeta}</div>
+                <p class="stem slds-m-bottom_medium">{gradedStem}</p>
+                <template for:each={feedbackOptions} for:item="o">
+                    <div key={o.key} class={o.cls}>
+                        <div class="slds-grid slds-grid_vertical-align-start">
+                            <span class="option-key">{o.key}</span>
+                            <div class="slds-col">
+                                <div class="option-text">
+                                    {o.text}
+                                    <template lwc:if={o.badge}>
+                                        <span class="slds-badge slds-m-left_x-small">{o.badge}</span>
+                                    </template>
+                                </div>
+                                <template lwc:if={o.explanation}>
+                                    <p class="explanation slds-m-top_xx-small">{o.explanation}</p>
+                                </template>
+                            </div>
+                        </div>
+                    </div>
+                </template>
+                <template lwc:if={grade.rawFeedback}>
+                    <p class="explanation slds-m-top_small">{grade.rawFeedback}</p>
+                </template>
+                <div class="slds-m-top_medium">
+                    <lightning-button variant="brand" label="Next question" onclick={next} disabled={busy}></lightning-button>
+                    <span class="slds-m-left_small slds-text-color_weak">or press Enter</span>
+                </div>
+            </template>
+
+            <!-- waiting for generation -->
+            <template lwc:if={isWaiting}>
+                <template lwc:if={overviewCerts.length}>
+                    <ul class="slds-m-bottom_medium">
+                        <template for:each={overviewCerts} for:item="c">
+                            <li key={c.name} class="slds-m-bottom_x-small">
+                                <strong>{c.name}</strong> — {c.examLine}
+                                <template lwc:if={c.domains}>
+                                    <div class="slds-text-color_weak">{c.domains}</div>
+                                </template>
+                            </li>
+                        </template>
+                    </ul>
+                </template>
+                <template lwc:if={pollGaveUp}>
+                    <p class="slds-m-bottom_small">Questions are taking longer than usual to generate.</p>
+                    <lightning-button label="Check again" onclick={retryPolling}></lightning-button>
+                </template>
+                <template lwc:else>
+                    <div class="waiting">
+                        <lightning-spinner alternative-text="Generating" size="small"></lightning-spinner>
+                        <p class="slds-m-left_x-large">Generating your next question — usually under a minute…</p>
+                    </div>
+                </template>
+            </template>
+
+            <!-- summary -->
+            <template lwc:if={isSummary}>
+                <p class="slds-text-heading_medium slds-m-bottom_small">{summaryScoreText}</p>
+                <template lwc:if={hasAreas}>
+                    <p class="slds-text-title_caps slds-m-bottom_x-small">By area (weakest first)</p>
+                    <template for:each={summary.areas} for:item="a">
+                        <div key={a.key} class="area slds-m-bottom_x-small">
+                            <div class="slds-grid slds-grid_align-spread">
+                                <span>{a.label}</span>
+                                <span class="slds-text-title_bold">{a.pct}% ({a.correct}/{a.total})</span>
+                            </div>
+                            <div class="bar"><div class="bar-fill" style={a.barStyle}></div></div>
+                        </div>
+                    </template>
+                </template>
+                <template lwc:if={hasMissed}>
+                    <p class="slds-text-title_caps slds-m-top_medium slds-m-bottom_x-small">Questions to review</p>
+                    <template for:each={summary.missed} for:item="m">
+                        <details key={m.key} class="missed slds-m-bottom_x-small">
+                            <summary>{m.stem}</summary>
+                            <p class="slds-m-top_x-small"><strong>Correct:</strong> {m.correctAnswer}</p>
+                            <p><strong>You chose:</strong> {m.yourAnswer}</p>
+                            <template for:each={m.feedbackBlocks} for:item="b">
+                                <p key={b.key} class="explanation slds-m-top_x-small">{b.text}</p>
+                            </template>
+                        </details>
+                    </template>
+                </template>
+                <div class="slds-m-top_medium">
+                    <template lwc:if={canContinue}>
+                        <lightning-button variant="brand" label="Continue practicing" onclick={continuePractice}
+                            class="slds-m-right_x-small"></lightning-button>
+                    </template>
+                    <lightning-button label="Start a new session" onclick={newSession}></lightning-button>
+                </div>
+            </template>
+        </div>
+    </lightning-card>
+</template>
