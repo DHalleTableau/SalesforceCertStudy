@@ -47,7 +47,8 @@ public without sharing class CertStudyService {
         for (Cert__c c : certs) {
             Boolean usable = c.Is_Aggregate__c || (c.Grounding_Chars__c != null && c.Grounding_Chars__c > 0);
             if (!usable) continue;
-            lines.add('- ' + c.Name + ' (code: ' + c.Cert_Code__c + ')' + (c.Is_Aggregate__c ? ' -- credential earned via its prerequisites' : ''));
+            String label = c.Name == c.Cert_Code__c ? c.Name : c.Name + ' (code: ' + c.Cert_Code__c + ')';
+            lines.add('- ' + label + (c.Is_Aggregate__c ? ' -- credential earned via its prerequisites' : ''));
         }
         if (lines.isEmpty()) {
             return String.isBlank(searchTerm)
@@ -157,7 +158,11 @@ public without sharing class CertStudyService {
 
         List<String> codes = new List<String>(res.resolved);
         codes.sort();
-        String delimited = ';' + String.join(codes, ';') + ';';
+        List<String> ids = new List<String>();
+        for (String code : codes) {
+            if (certsByCode.containsKey(code)) ids.add(String.valueOf(certsByCode.get(code).Id));
+        }
+        String delimited = ';' + String.join(ids, ';') + ';';
         if (delimited.length() > 255) {
             return 'That selection expands to too many certifications for one session. Please pick fewer.';
         }
@@ -192,6 +197,7 @@ public without sharing class CertStudyService {
                 doms.add(String.valueOf(d.get('name')) + (d.get('weight_pct') != null ? ' (' + String.valueOf(d.get('weight_pct')) + '%)' : ''));
             }
             if (!doms.isEmpty()) lines.add('  Domains: ' + String.join(doms, '; '));
+            lines.add('');
         }
         lines.add('');
         lines.add(serveNext(s));
@@ -242,6 +248,7 @@ public without sharing class CertStudyService {
         lines.add(isCorrect
             ? '✅ **Correct!**'
             : '❌ **Not quite.** You chose ' + String.join(chosen, ', ') + '; the correct answer is ' + String.join(correct, ', ') + '.');
+        lines.add('');
         lines.add('Score so far: ' + right + '/' + total + ' (' + pct(right, total) + '%)');
         lines.add('');
         lines.add('**Explanation**');
@@ -298,6 +305,7 @@ public without sharing class CertStudyService {
 
         List<String> lines = new List<String>();
         lines.add('**Session summary**' + (endIt ? ' (session ended)' : ''));
+        lines.add('');
         lines.add('Answered: ' + answers.size() + ' | Correct: ' + right + ' (' + pct(right, answers.size()) + '%)');
         if (!byArea.isEmpty()) {
             List<String> areaLines = new List<String>();
@@ -340,17 +348,13 @@ public without sharing class CertStudyService {
         update toEnd;
     }
 
-    public static Boolean isCertNeeded(String certCode) {
-        String likeTerm = '%;' + certCode + ';%';
+    public static Boolean isCertNeeded(Id certId) {
+        String likeTerm = '%;' + String.valueOf(certId) + ';%';
         return [SELECT COUNT() FROM Study_Session__c WHERE Status__c = :ACTIVE AND Cert_Codes__c LIKE :likeTerm] > 0;
     }
 
     public static Set<String> activeCertCodes() {
-        Set<String> codes = new Set<String>();
-        for (Study_Session__c s : [SELECT Cert_Codes__c FROM Study_Session__c WHERE Status__c = :ACTIVE]) {
-            codes.addAll(sessionCodes(s));
-        }
-        return codes;
+        return codesForSessions([SELECT Cert_Codes__c FROM Study_Session__c WHERE Status__c = :ACTIVE]);
     }
 
     private static Study_Session__c activeSession(String key) {
@@ -433,9 +437,9 @@ public without sharing class CertStudyService {
         lines.add('');
         for (Map<String, String> o : options(q)) {
             lines.add('**' + o.get('key') + '.** ' + o.get('text'));
+            lines.add(''); // chat surfaces collapse single newlines
         }
         Integer need = correctKeys(q).size();
-        lines.add('');
         lines.add(need == 1
             ? '_Choose 1. Reply with the letter._'
             : '_Choose ' + need + '. Reply with the letters, e.g. "B, D"._');
@@ -472,12 +476,22 @@ public without sharing class CertStudyService {
         return String.join(parts, '; ');
     }
 
+    /** Cert_Codes__c holds ;-delimited Cert__c Ids; returns the matching cert codes. */
     private static Set<String> sessionCodes(Study_Session__c s) {
-        Set<String> codes = new Set<String>();
-        if (String.isBlank(s.Cert_Codes__c)) return codes;
-        for (String c : s.Cert_Codes__c.split(';')) {
-            if (String.isNotBlank(c)) codes.add(c.trim());
+        return codesForSessions(new List<Study_Session__c>{ s });
+    }
+
+    private static Set<String> codesForSessions(List<Study_Session__c> sessions) {
+        Set<Id> certIds = new Set<Id>();
+        for (Study_Session__c s : sessions) {
+            if (String.isBlank(s.Cert_Codes__c)) continue;
+            for (String part : s.Cert_Codes__c.split(';')) {
+                if (String.isNotBlank(part)) certIds.add(Id.valueOf(part.trim()));
+            }
         }
+        Set<String> codes = new Set<String>();
+        if (certIds.isEmpty()) return codes;
+        for (Cert__c c : [SELECT Cert_Code__c FROM Cert__c WHERE Id IN :certIds]) codes.add(c.Cert_Code__c);
         return codes;
     }
 
@@ -517,21 +531,21 @@ public without sharing class CertStudyService {
     private static List<String> splitList(String input) {
         List<String> out = new List<String>();
         if (String.isBlank(input)) return out;
-        for (String t : input.split('[,;\\s]+')) {
+        for (String t : input.split('[,;\\n]+')) {
             if (String.isNotBlank(t)) out.add(t.trim());
         }
         return out;
     }
 
-    /** "AI-201=yes; DATA-CON-101=no" -> {AI-201: true, DATA-CON-101: false} */
+    /** "AI-201=yes; DATA-CON-101=no" -> {AI-201: true, DATA-CON-101: false}. Codes may contain spaces/colons. */
     private static Map<String, Boolean> parseAnswers(String input) {
         Map<String, Boolean> out = new Map<String, Boolean>();
         if (String.isBlank(input)) return out;
         for (String pair : input.split('[,;]+')) {
-            List<String> kv = pair.split('[=:]');
-            if (kv.size() != 2) continue;
-            String v = kv[1].trim().toLowerCase();
-            out.put(kv[0].trim().toUpperCase(), v.startsWith('y') || v == 'true' || v == 'include');
+            Integer eq = pair.lastIndexOf('=');
+            if (eq < 1) continue;
+            String v = pair.substring(eq + 1).trim().toLowerCase();
+            out.put(pair.substring(0, eq).trim().toUpperCase(), v.startsWith('y') || v == 'true' || v == 'include');
         }
         return out;
     }

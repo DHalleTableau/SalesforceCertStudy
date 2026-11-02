@@ -15,12 +15,52 @@ The goal is unchanged: no model call ever happens in a learner's turn. Actions o
 | `worker.py` | `CertStudyPoolJob` (top-up chain, per-cert lock) + `CertStudyScheduler` (hourly safety net, ends idle sessions) |
 | `cert_resolution.py`, `app.py` routes | `CertStudyService` + 5 invocable actions (`CertStudy_*`) |
 
+## ▶ Resume here (paused Nov 2, 2026)
+
+The backend is done and verified:
+- deployed, 18/18 tests passing;
+- data loaded;
+- real question generation working;
+- the hourly scheduler running.
+
+Current work is the **Agentforce agent**. Start with **`AGENT_SETUP.md`**, which has the current state, builder gotchas, every Optimizer prompt and the retest script.
+
+Before agent testing, make sure the latest Apex is deployed. It's harmless if it already is:
+
+```bash
+cd ~/Documents/SalesforceCertStudy/salesforce
+sf org display --target-org certstudy | grep -E "Connected Status|Username"   # re-login if expired: see below
+sf project deploy start --source-dir force-app --target-org certstudy | grep -E "Status: (Succeeded|Failed)|Error"
+```
+
+If the CLI session expired, log in again: `sf org login web --alias certstudy --instance-url https://trailsignup-5d9fea1e5cdf7f.my.salesforce.com`
+
+**Handy one-line scripts** (in `scripts/`; run with `sf apex run --file scripts/<name>.apex --target-org certstudy`):
+- `modeltest.apex`: model reachable?
+- `gentest.apex`: start generation on a cert with no questions.
+- `showquestion.apex` / `answergentest.apex`: view or answer the gentest user's question.
+- `unlock.apex`: clear stuck generation locks and restart top-ups.
+
+Run multi-line shell snippets one command at a time; pasted heredocs can hang the terminal.
+
+**Queries for checking progress.** Filter by cert name, because a date filter also catches the 301 migrated questions:
+
+```bash
+sf data query --target-org certstudy -q "SELECT Name, Num_Questions__c, Passing_Score__c, Top_Up_Started_At__c, Last_Generation_Error__c FROM Cert__c WHERE Top_Up_Started_At__c != null OR Last_Generation_Error__c != null"
+sf data query --target-org certstudy -q "SELECT User_Key__c, Status__c, CreatedDate FROM Study_Session__c ORDER BY CreatedDate DESC LIMIT 3"
+```
+
+**Data facts that shape the code:**
+- In this data set, cert codes are the full cert names. They contain spaces, and one contains a colon.
+- Sessions store cert record Ids in `Cert_Codes__c`, not names, to stay under 255 chars.
+- The 2 aggregate certs are Application Architect and System Architect.
+
 ## 1. Deploy (about 10 minutes)
 
 ```bash
 cd ~/Documents/SalesforceCertStudy/salesforce
 sf org login web --alias certstudy          # log in to your org
-sf project deploy start --target-org certstudy --test-level RunLocalTests
+sf project deploy start --source-dir force-app --target-org certstudy | grep -E "Status: (Succeeded|Failed)|Error"
 ```
 
 Before deploying, check that the model name in `labels/CustomLabels.labels-meta.xml` (`CertStudy_Model`) exists in your org. Look under **Setup → Einstein Studio → Models** for the API name of the model you want, such as a Claude model. You can also change it after deploying under **Setup → Custom Labels**, with no redeploy.
@@ -101,6 +141,6 @@ Activate the agent, then test in the **Agent Builder preview**:
 
 - **Grounding:** up to 60k characters per call, taken as a random window from the cert's resources. Production should move resource text into a Data 360 search index for retrieval.
 - **Model output length:** the Models API default output limit might truncate long 5-option feedback. If `Last_Generation_Error__c` keeps showing "feedback too short" or parse failures, that's the cause. Fix it by picking a model with a larger output limit, or by splitting generation into two calls.
-- **Chain depth:** some org editions cap how many times a Queueable can chain itself. If a pool stops short of 5, the hourly scheduler and every question claim restart it.
+- **Chain depth:** Trial/Developer Edition orgs cap chained Queueables at depth 5. `CertStudyPoolJob` starts each chain with an explicit max of 5. At the cap it stops cleanly and schedules a one-off `Cert Study restart …` job about 1 minute out. The hourly scheduler and every question claim also restart stalled pools.
 - **Not ported yet:** CSV export (the summary action covers review for now), the contributions queue, and weak-domain targeting.
 - **Adding material for now:** give it to Claude in a session, or create a `Cert Resource` record on the cert, paste the text into Content, and set the Role.

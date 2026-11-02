@@ -6,7 +6,56 @@
 > narrative behind non-obvious decisions (only needed for "why", not
 > for doing the next task).
 
-## Local Environment Notes (read before touching git or pip)
+## >>> CURRENT DIRECTION (Oct 30, 2026): Salesforce-native rebuild <<<
+
+**Heroku is abandoned.** The Heroku dyno can never reach the internal Claude
+gateway (AWS), and AWS access/permissions can't be changed. Everything now
+lives in a Salesforce org the user administers (a Trailhead-signup org with
+no PII or customer data; CLI alias `certstudy`). Generation goes through the
+Einstein Models API (`sfdc_ai__DefaultBedrockAnthropicClaude55Sonnet`), so no
+gateway is needed. The interface is an Agentforce agent: Agent Builder
+preview first, then the Slack demo org (testers added as users there).
+Internal Slack/org62 comes later. The sections below describe the retired
+Heroku build; they are kept for reference and for the migration scripts.
+
+**Read these to resume:** `salesforce/README.md` (deploy, data load, agent
+setup), `SPIKE.md` (pass/fail goals and status), then the progress note below.
+
+**Resuming in Cowork:** connect the folder `~/Documents/SalesforceCertStudy`
+and read the files above with absolute paths. Do not run recursive listings
+from the repo root (`.venv` holds 5000+ files); search under `salesforce/`
+only. The user runs `sf` CLI and `git push` in their own Terminal. Claude
+edits files and checks Apex syntax in the sandbox with `prettier-plugin-apex@1.13.0`
+(the sandbox has Java 11, so the 2.x plugin won't run).
+
+**Progress (Nov 2, 2026, paused mid-agent-testing):**
+- **Done and verified:**
+  - Deploy; 18/18 tests passing.
+  - Model `sfdc_ai__DefaultBedrockAnthropicClaude55Sonnet` works.
+  - Data loaded: 88 certs, 35 prerequisite links, 172 resources, 301 questions.
+  - Hourly scheduler running.
+  - Chain-depth fix deployed (Trial org caps chained Queueables at 5; the job now stops and schedules a one-off restart).
+  - **Real generation verified (spike Q1 passed):** two certs went from 0 to 5 questions plus an overview, no errors, about 6-10s per question, good quality.
+  - Prompt and parse tweaks deployed: no mirror-image option pairs; the doubled "Correct: Correct." label is stripped; the unlocked pre-check keeps answer turns from waiting on the generation lock.
+  - `scheduleHourly()` is idempotent.
+- **Probably not deployed yet:** the Apex formatting fix that puts blank lines between options and sections, because chat collapses single newlines. Run the deploy again: `sf project deploy start --source-dir force-app --target-org certstudy | grep -E "Status: (Succeeded|Failed)|Error"`.
+- **Agent:** built in the NEW Agentforce Builder. Full state, gotchas, every Optimizer prompt used, and the retest script are in **`salesforce/AGENT_SETUP.md`**. In short:
+  - The actions are wired up, and Find Certs → Start Session work in Live Test.
+  - Answer handling (a reply of "A" → Submit) was fixed by the Optimizer and saved; it hasn't been retested.
+- **Next, in order:**
+  1. In the builder: confirm `practice_session` has RULE 1. Send Optimizer prompt #3 if needed. Always save from the Agent Definition tab.
+  2. Retest in Live Test.
+  3. Identity check: is `User_Key__c` the learner's email or the agent user's? If it's the agent user, pass the end-user identity into `userKey`.
+  4. Commit the version, activate it, and deploy to the Slack demo org with testers.
+- **Open items:**
+  - Weak-domain targeting.
+  - CSV export.
+  - Contributions intake.
+  - Data 360 search index for grounding.
+  - Delete the Heroku app/DB.
+  - Commit and push the repo (the user commits from their Terminal).
+
+## Local Environment Notes (retired Heroku build — read before touching git or pip)
 
 - **Clone into `$TMPDIR`, not the default working directory** — `.git`
   writes fail elsewhere in this sandbox. The exact command is in the

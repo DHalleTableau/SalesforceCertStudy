@@ -89,9 +89,16 @@ private class CertStudyTest {
         insert qs;
     }
 
-    private static void activeSession(String codesDelimited) {
+    /** Sessions store ;-delimited Cert__c Ids. */
+    private static String ids(List<String> codes) {
+        List<String> out = new List<String>();
+        for (String c : codes) out.add(String.valueOf(certId(c)));
+        return ';' + String.join(out, ';') + ';';
+    }
+
+    private static void activeSession(String code) {
         insert new Study_Session__c(
-            User_Key__c = 'job@example.com', Cert_Codes__c = codesDelimited,
+            User_Key__c = 'job@example.com', Cert_Codes__c = ids(new List<String>{ code }),
             Status__c = 'Active', Started_At__c = DateTime.now(), Last_Activity__c = DateTime.now()
         );
     }
@@ -132,16 +139,32 @@ private class CertStudyTest {
 
         msg = CertStudyService.startSession('learner@example.com', 'AGG-1', 'AI-201=no');
         Assert.isTrue(msg.contains('Practice session started'), msg);
-        Assert.areEqual(';AGG-1;AI-201;', [
+        Assert.areEqual(ids(new List<String>{ 'AGG-1', 'AI-201' }), [
             SELECT Cert_Codes__c FROM Study_Session__c WHERE Status__c = 'Active'
         ].Cert_Codes__c);
 
         msg = CertStudyService.startSession('learner@example.com', 'AI-201', 'AI-201=yes');
         List<Study_Session__c> active = [SELECT Cert_Codes__c FROM Study_Session__c WHERE Status__c = 'Active'];
         Assert.areEqual(1, active.size(), 'starting a new session ends the old one');
-        Assert.areEqual(';AI-201;FOUND-101;', active[0].Cert_Codes__c);
+        Assert.areEqual(ids(new List<String>{ 'AI-201', 'FOUND-101' }), active[0].Cert_Codes__c);
 
         Assert.isTrue(CertStudyService.startSession('learner@example.com', 'NOPE', null).contains('could not find'));
+    }
+
+    @IsTest
+    static void fullNameCodesWithSpacesAndColons() {
+        CertStudyLlm.instance = new FakeLlm();
+        Cert__c named = new Cert__c(Name = 'Consumer Goods Cloud: Trade Promotion', Cert_Code__c = 'Consumer Goods Cloud: Trade Promotion');
+        insert named;
+        insert new Cert_Prerequisite__c(Cert__c = named.Id, Prereq_Cert__c = certId('AI-201'));
+        insert new Cert_Resource__c(Cert__c = named.Id, Role__c = 'Primary', Content__c = 'Guide text.');
+        String key = 'names@example.com';
+        String msg = CertStudyService.startSession(key, 'consumer goods cloud: trade promotion', null);
+        Assert.isTrue(msg.startsWith('NEEDS_ANSWER (CONSUMER GOODS CLOUD: TRADE PROMOTION)'), msg);
+        msg = CertStudyService.startSession(key, 'Consumer Goods Cloud: Trade Promotion', 'Consumer Goods Cloud: Trade Promotion=no');
+        Assert.isTrue(msg.contains('Practice session started'), msg);
+        Assert.isTrue(CertStudyService.findCerts('Consumer').contains('- Consumer Goods Cloud: Trade Promotion'));
+        Assert.isTrue(CertStudyService.isCertNeeded(named.Id));
     }
 
     @IsTest
@@ -224,7 +247,7 @@ private class CertStudyTest {
     @IsTest
     static void poolJobDerivesOverviewFirst() {
         CertStudyLlm.instance = new FakeLlm();
-        activeSession(';AI-201;');
+        activeSession('AI-201');
         Test.startTest();
         System.enqueueJob(new CertStudyPoolJob(certId('AI-201')));
         Test.stopTest();
@@ -241,7 +264,7 @@ private class CertStudyTest {
     static void poolJobGeneratesValidQuestion() {
         CertStudyLlm.instance = new FakeLlm();
         markOverviewDone('AI-201');
-        activeSession(';AI-201;');
+        activeSession('AI-201');
         Test.startTest();
         System.enqueueJob(new CertStudyPoolJob(certId('AI-201')));
         Test.stopTest();
@@ -255,6 +278,24 @@ private class CertStudyTest {
         Cert__c c = cert('AI-201');
         Assert.isNull(c.Last_Generation_Error__c);
         Assert.isNotNull(c.Top_Up_Started_At__c, 'pool not full yet, so chain continues');
+    }
+
+    @IsTest
+    static void poolJobSchedulesRestartAtChainDepthLimit() {
+        CertStudyLlm.instance = new FakeLlm();
+        markOverviewDone('AI-201');
+        activeSession('AI-201');
+        CertStudyPoolJob.forceAtMaxDepth = true;
+        Test.startTest();
+        System.enqueueJob(new CertStudyPoolJob(certId('AI-201')));
+        Test.stopTest();
+        Assert.areEqual(1, [SELECT COUNT() FROM Question__c], 'work done before stopping is kept');
+        // Either the one-off restart is still pending, or it already ran inside
+        // Test.stopTest() and re-armed the pool (lock taken by a fresh chain).
+        String pattern = CertStudyPoolJob.RESTART_JOB_PREFIX + '%';
+        Integer pendingRestarts = [SELECT COUNT() FROM CronTrigger WHERE CronJobDetail.Name LIKE :pattern];
+        Boolean reArmed = cert('AI-201').Top_Up_Started_At__c != null;
+        Assert.isTrue(pendingRestarts == 1 || reArmed, 'chain restart was scheduled or already ran');
     }
 
     @IsTest
@@ -276,7 +317,7 @@ private class CertStudyTest {
         fake.fail = true;
         CertStudyLlm.instance = fake;
         markOverviewDone('AI-201');
-        activeSession(';AI-201;');
+        activeSession('AI-201');
         Test.startTest();
         System.enqueueJob(new CertStudyPoolJob(certId('AI-201')));
         Test.stopTest();
@@ -287,7 +328,7 @@ private class CertStudyTest {
     @IsTest
     static void poolJobReportsMissingContent() {
         CertStudyLlm.instance = new FakeLlm();
-        activeSession(';EMPTY-1;');
+        activeSession('EMPTY-1');
         Test.startTest();
         System.enqueueJob(new CertStudyPoolJob(certId('EMPTY-1')));
         Test.stopTest();
@@ -300,7 +341,7 @@ private class CertStudyTest {
         fake.biased = true;
         CertStudyLlm.instance = fake;
         markOverviewDone('AI-201');
-        activeSession(';AI-201;');
+        activeSession('AI-201');
         CertStudyPoolJob job = new CertStudyPoolJob(certId('AI-201'));
         Cert__c c = cert('AI-201');
         for (Integer i = 0; i < CertStudyPoolJob.MAX_ATTEMPTS; i++) {
@@ -333,6 +374,10 @@ private class CertStudyTest {
 
         Assert.isTrue(CertStudyGenerator.hasDuplicateSentence('This sentence is repeated here. This sentence is repeated here.'));
         Assert.areEqual('Good text', CertStudyGenerator.stripArtifacts('Good text</invoke> junk'));
+        Assert.areEqual('This reverses it.', CertStudyGenerator.stripVerdict('Incorrect. This reverses it.'));
+        Assert.areEqual('Maps the objective.', CertStudyGenerator.stripVerdict('Correct: Maps the objective.'));
+        Assert.areEqual('Correctly scoped option.', CertStudyGenerator.stripVerdict('Correctly scoped option.'));
+        Assert.isTrue(CertStudyGenerator.buildQuestionPrompt('X', null, 1, 'single', 'terminology', 'g', null).contains('mirror-image'));
 
         Assert.areEqual(new List<String>{ 'B', 'D' }, CertStudyService.parseLetters('B and D'));
         Assert.areEqual(new List<String>{ 'B', 'D' }, CertStudyService.parseLetters('bd'));
@@ -351,7 +396,7 @@ private class CertStudyTest {
     static void schedulerEndsIdleSessions() {
         CertStudyLlm.instance = new FakeLlm();
         insert new Study_Session__c(
-            User_Key__c = 'idle@example.com', Cert_Codes__c = ';AI-201;', Status__c = 'Active',
+            User_Key__c = 'idle@example.com', Cert_Codes__c = ids(new List<String>{ 'AI-201' }), Status__c = 'Active',
             Started_At__c = DateTime.now().addHours(-30), Last_Activity__c = DateTime.now().addHours(-30)
         );
         Test.startTest();

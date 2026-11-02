@@ -66,7 +66,12 @@ def main():
     args = ap.parse_args()
     if not args.db:
         sys.exit("Set DATABASE_URL or pass --db")
-    db_url = args.db.replace("postgres://", "postgresql://", 1)
+    # `heroku config:get` can emit blank/warning lines before the value --
+    # keep only the line that actually looks like a URL.
+    url_lines = [l.strip() for l in args.db.splitlines() if "://" in l]
+    if not url_lines:
+        sys.exit("DATABASE_URL doesn't contain a database URL")
+    db_url = url_lines[-1].replace("postgres://", "postgresql://", 1)
     os.makedirs(args.out, exist_ok=True)
     warnings = []
     engine = create_engine(db_url)

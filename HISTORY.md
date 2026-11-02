@@ -489,3 +489,92 @@ installed and auto-fetch does its job -- see PLAN.md's Resource
 Ingestion section for the exact command. Manual paste should be the
 fallback for genuinely blocked/JS-rendered pages, not the default path
 for every new resource.
+
+## Pivot to a Salesforce-native build (Oct 30, 2026)
+
+**Why we left Heroku.** Heroku dynos can't reach the internal Claude gateway,
+and getting AWS-side access or permissions changed was a non-starter. Rather
+than keep working around the network, everything moved into a Salesforce org
+the user administers (a Trailhead-signup org with no PII or customer data).
+Inside the org, the Einstein Models API reaches Claude through the Trust
+Layer. The working model API name is
+`sfdc_ai__DefaultBedrockAnthropicClaude55Sonnet`. Sonnet was chosen because
+generation runs in the background, so speed barely matters, while quality
+(nearly-tied distractors, long per-option feedback, strict JSON) matters most.
+
+**Design carried over:**
+- Generation still never happens in a learner's turn.
+- The shared per-cert pool of 5 `Ready` questions maps to `Question__c` rows.
+- The Postgres advisory lock is replaced by `Cert__c.Top_Up_Started_At__c`, which counts as stale after 15 minutes.
+- All the structured-output lessons from this file are ported into `CertStudyGenerator`:
+  - flat arrays;
+  - exact option counts checked in code;
+  - artifact stripping;
+  - per-option explanations assembled after the shuffle;
+  - length-bias rejection with a least-biased fallback.
+- The model is asked for raw JSON text, not tool calls, because the Models API returns plain text. The parser reads from the first `{` to the last `}`.
+- Learners are keyed on `User_Key__c` (email by default, a Slack ID later), not on a Salesforce user, so the interface can change without touching the data.
+
+**Interface decision.** The interface is an Agentforce agent. Employee agents
+need users in the hosting org. Testers will be added to a Slack demo org for
+now; the user could connect a Slack demo org to this org, but not the internal
+org62 Slack. Experience Cloud with SSO just-in-time provisioning remains the
+fallback for "any employee, no manual provisioning."
+
+**Gotchas hit while getting it running:**
+- **CLI auth.** `sf org login web` kept demanding a password even though the
+  browser was logged in to three orgs. Password-reset emails silently did
+  nothing (likely org email deliverability). The Developer Console session-ID
+  workaround was a dead end: the Execute window was hard to find, and debug
+  logs came back empty. What worked was resetting the password from the
+  user's own record in Setup → Users, then a normal web login.
+- **Einstein Studio isn't in Setup.** It's an app in the App Launcher (Data
+  Cloud). It was easier to test model names with a short Apex call.
+- **"Deploy succeeded" with 0 tests.** Trailhead-signup orgs don't enforce
+  test runs on deploy. Run `sf apex run test` explicitly.
+- **Cert codes are full names.** In the real data, `cert_code` equals the cert
+  name (up to 76 chars, with spaces, and one with a colon). Two consequences:
+  - session cert lists overflowed 255 chars, so sessions store cert Ids instead;
+  - input parsing split on whitespace and `:`, so it now splits only on `,`/`;` and on the last `=`.
+
+  Found by inspecting the export *before* loading it. This is worth repeating
+  for any new data source.
+- **Chain-depth crash.** Trial/DE orgs cap chained Queueables at depth 5. The
+  5th job's `System.enqueueJob` threw `AsyncException: Maximum stack depth`,
+  and because the exception was unhandled, it rolled back that job's own
+  insert and left the cert locked. The fix is an explicit
+  `AsyncOptions.MaximumQueueableStackDepth = 5`; at the cap the job stops
+  cleanly and schedules a one-off restart via `System.schedule` about a minute
+  out. The fix was written but NOT yet deployed when the session paused.
+- **`heroku config:get` output started with a blank line,** which broke URL
+  parsing in the export script. The script now keeps only the line containing
+  `://`. The resulting error message printed the full DB URL, including the
+  password, into the chat.
+
+## Nov 2, 2026: generation verified, agent built in the new Agentforce Builder
+
+- **Generation passes the spike.** After the chain-depth fix, test certs went from 0 to 5 questions plus an
+  overview with no errors, at about 6-10s per question. Quality review found two issues:
+  - **Mirror-image option pairs** (A and B identical except swapped terms), which give away the answer. Fixed with prompt rule 5.
+  - The model began each explanation with its own verdict, giving **"Correct: Correct."**. Fixed with `stripVerdict()`.
+
+  Also found: an answer turn took 3.5s because `requestTopUp` blocked on `FOR UPDATE` while a generation job
+  held the cert row. It now does an unlocked pre-check first and locks only certs that look claimable.
+- **Test failures after scheduling the real hourly job.** Tests can see org `CronTrigger` rows, so
+  `System.schedule` with an existing job name failed. `scheduleHourly()` is now idempotent. A restart test
+  also had to accept that the scheduled restart may already have run inside `Test.stopTest()`.
+- **The org forces the new Agentforce Builder.** "Maybe Later" on the switch prompt only closed it, and the next
+  New Agent click landed in the new builder anyway. The agent was generated from a plain-language description
+  through the Agent Optimizer. It guessed the Apex parameter names, so the exact `@InvocableVariable` names had
+  to be given to it. It also added a `RoutableId` variable sourced from `URL_Redacted`, which broke compile, so
+  that variable was deleted.
+- **The new agent user had no Apex access.** The trace said the agent "did not have permission to call" the
+  actions, and the model replied with generic filler. Fixed by assigning `CertStudy_User` to the generated agent
+  user. The username wraps in CLI tables (`.ex` / `t`); its full suffix is `.ext`.
+- **Answers weren't graded.** The LLM answered "A" conversationally instead of calling Submit, so the
+  Optimizer moved an explicit RULE 1 to the top of the practice instructions. Agent Script's `before_reasoning`
+  can't pattern-match raw user text, so this rule can't be made fully deterministic.
+- **Chat collapses single newlines,** so options showed on one line. Fixed with blank lines between options in
+  `formatQuestion`.
+- **Builder save bug.** Saving while the Preview tab was active threw "[Agent definition model not found]
+  markup://agent_authoring:modelManager", and a page reload didn't fix it. Saving from the Agent Definition tab works.

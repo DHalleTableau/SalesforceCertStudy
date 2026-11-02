@@ -20,7 +20,14 @@ public without sharing class CertStudyScheduler implements Schedulable {
         CertStudyPoolJob.requestTopUp(CertStudyService.activeCertCodes());
     }
 
+    public static final String JOB_NAME = 'Cert Study maintenance';
+
+    /** Idempotent: returns the existing job's Id if already scheduled. */
     public static String scheduleHourly() {
-        return System.schedule('Cert Study maintenance', '0 0 * * * ?', new CertStudyScheduler());
+        List<CronTrigger> existing = [
+            SELECT Id FROM CronTrigger WHERE CronJobDetail.Name = :JOB_NAME AND NextFireTime != null LIMIT 1
+        ];
+        if (!existing.isEmpty()) return existing[0].Id;
+        return System.schedule(JOB_NAME, '0 0 * * * ?', new CertStudyScheduler());
     }
 }

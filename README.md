@@ -1,5 +1,12 @@
 # SalesforceCertStudy
 
+> **Oct 2026: moving off Heroku to a Salesforce-native build.** Heroku can't
+> reach the internal Claude gateway, so the app now runs in a Salesforce org:
+> Einstein Models API for generation, custom objects for state, and an
+> Agentforce agent as the interface. See [`salesforce/README.md`](salesforce/README.md)
+> (start at "Resume here") and the status block at the top of [PLAN.md](PLAN.md).
+> The rest of this README describes the retired Heroku build.
+
 A Heroku-hosted practice-exam tutor for Salesforce certifications. It
 generates continuous, unlimited cert-like questions for one or more
 certs at once, with full detailed per-question feedback (why the correct

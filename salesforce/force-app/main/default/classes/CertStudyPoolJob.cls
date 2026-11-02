@@ -12,6 +12,17 @@
 public without sharing class CertStudyPoolJob implements Queueable, Database.AllowsCallouts {
     public static final Integer MAX_ATTEMPTS = 5;
     public static final Integer LOCK_STALE_MINUTES = 15;
+    /**
+     * Trial/Developer Edition orgs cap chained Queueables at depth 5. Each
+     * chain is started with this explicit max; at the cap the job stops
+     * cleanly and schedules a one-off CertStudyScheduler run ~1 minute out,
+     * which starts a fresh chain.
+     */
+    public static final Integer MAX_CHAIN_DEPTH = 5;
+    public static final String RESTART_JOB_PREFIX = 'Cert Study restart ';
+
+    @TestVisible
+    private static Boolean forceAtMaxDepth = false;
 
     private Id certId;
     private Integer attempt = 0;
@@ -37,11 +48,27 @@ public without sharing class CertStudyPoolJob implements Queueable, Database.All
             readyByCert.put((Id) ar.get('certId'), (Integer) ar.get('n'));
         }
 
+        // Cheap unlocked pre-check first, so a learner's turn never waits on a
+        // row lock held by a running generation job for the same cert.
+        Set<Id> candidates = new Set<Id>();
+        for (Cert__c c : [
+            SELECT Id, Top_Up_Started_At__c, Grounding_Chars__c
+            FROM Cert__c
+            WHERE Cert_Code__c IN :certCodes
+        ]) {
+            if (c.Grounding_Chars__c == null || c.Grounding_Chars__c == 0) continue;
+            if (c.Top_Up_Started_At__c != null && c.Top_Up_Started_At__c > staleBefore) continue;
+            Integer ready = readyByCert.containsKey(c.Id) ? readyByCert.get(c.Id) : 0;
+            if (ready >= CertStudyGenerator.POOL_SIZE) continue;
+            candidates.add(c.Id);
+        }
+        if (candidates.isEmpty()) return;
+
         List<Cert__c> toStart = new List<Cert__c>();
         for (Cert__c c : [
             SELECT Id, Top_Up_Started_At__c, Is_Aggregate__c, Grounding_Chars__c
             FROM Cert__c
-            WHERE Cert_Code__c IN :certCodes
+            WHERE Id IN :candidates
             FOR UPDATE
         ]) {
             if (c.Grounding_Chars__c == null || c.Grounding_Chars__c == 0) continue;
@@ -55,7 +82,9 @@ public without sharing class CertStudyPoolJob implements Queueable, Database.All
         if (toStart.isEmpty()) return;
         update toStart;
         for (Cert__c c : toStart) {
-            System.enqueueJob(new CertStudyPoolJob(c.Id));
+            AsyncOptions opts = new AsyncOptions();
+            opts.MaximumQueueableStackDepth = MAX_CHAIN_DEPTH;
+            System.enqueueJob(new CertStudyPoolJob(c.Id), opts);
         }
     }
 
@@ -73,6 +102,11 @@ public without sharing class CertStudyPoolJob implements Queueable, Database.All
             cert.Last_Generation_Error__c = (DateTime.now().format() + ' ' + e.getTypeName() + ': ' + e.getMessage()).abbreviate(32000);
             chain = false;
         }
+        Boolean restartLater = false;
+        if (chain && atMaxDepth()) {
+            chain = false;
+            restartLater = true;
+        }
         cert.Top_Up_Started_At__c = chain ? DateTime.now() : null;
         update cert;
 
@@ -81,14 +115,41 @@ public without sharing class CertStudyPoolJob implements Queueable, Database.All
             next.attempt = attempt;
             next.fallback = fallback;
             next.fallbackRatio = fallbackRatio;
-            System.enqueueJob(next);
+            try {
+                System.enqueueJob(next);
+            } catch (AsyncException e) {
+                // Depth limit we could not detect up front: release the lock so the restart can claim it.
+                update new Cert__c(Id = certId, Top_Up_Started_At__c = null);
+                restartLater = true;
+            }
         }
+        if (restartLater) scheduleRestart();
+    }
+
+    private static Boolean atMaxDepth() {
+        if (forceAtMaxDepth) return true;
+        Integer depth = AsyncInfo.getCurrentQueueableStackDepth();
+        return depth != null && depth >= MAX_CHAIN_DEPTH;
+    }
+
+    /** One-off CertStudyScheduler run in ~1 minute, unless one is already pending. */
+    @TestVisible
+    private static void scheduleRestart() {
+        String pattern = RESTART_JOB_PREFIX + '%';
+        Integer pending = [
+            SELECT COUNT() FROM CronTrigger
+            WHERE CronJobDetail.Name LIKE :pattern AND NextFireTime != null
+        ];
+        if (pending > 0) return;
+        DateTime t = DateTime.now().addMinutes(1);
+        String cron = t.second() + ' ' + t.minute() + ' ' + t.hour() + ' ' + t.day() + ' ' + t.month() + ' ? ' + t.year();
+        System.schedule(RESTART_JOB_PREFIX + t.getTime(), cron, new CertStudyScheduler());
     }
 
     /** One unit of work. Returns true if another job should follow. All callouts happen before any DML. */
     @TestVisible
     private Boolean runOnce(Cert__c cert) {
-        if (!CertStudyService.isCertNeeded(cert.Cert_Code__c)) return false;
+        if (!CertStudyService.isCertNeeded(cert.Id)) return false;
 
         String grounding = CertStudyGenerator.assembleGrounding(cert.Id, CertStudyGenerator.MAX_GROUNDING_CHARS);
         if (String.isBlank(grounding)) {

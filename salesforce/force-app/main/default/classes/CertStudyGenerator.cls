@@ -160,6 +160,7 @@ public without sharing class CertStudyGenerator {
         lines.add('2. Do NOT restate, list, or describe the answer options within the stem itself -- the stem presents the scenario or question only.');
         lines.add('3. Each option text must be SHORT: a single phrase or at most one sentence, matching real Salesforce exam options. Put all reasoning in option_explanations, never in the option text.');
         lines.add('4. Keep the stem SHORT -- around 40-60 words (2-3 sentences). Only go longer if a scenario genuinely needs it, and stay well under 100 words.');
+        lines.add('5. Do NOT write mirror-image options: no two options may be the same statement with terms swapped or reversed (e.g. "X defines A; Y builds B" vs "Y defines A; X builds B"). A swapped pair tells a test-savvy reader the answer is one of the two. Each wrong option must be wrong for a DIFFERENT reason (wrong term, wrong scope, wrong product area, wrong sequence).');
         lines.add('');
         lines.add('Ground the question in this exam content (do not invent facts outside it):');
         lines.add('---');
@@ -174,7 +175,7 @@ public without sharing class CertStudyGenerator {
         lines.add('  "correct": [the key(s) of the correct option(s)],');
         lines.add('  "option_explanations": [exactly ' + numOptions + ' explanations, same order as option_keys]');
         lines.add('}');
-        lines.add('option_explanations must have one entry per option: for a correct option explain why it is correct; for each wrong option explain specifically why it is wrong. Each entry is a full, terminology-focused explanation, not a short summary -- it is shown to the user after they answer.');
+        lines.add('option_explanations must have one entry per option: for a correct option explain why it is correct; for each wrong option explain specifically why it is wrong. Each entry is a full, terminology-focused explanation, not a short summary -- it is shown to the user after they answer. Do not begin an explanation with a verdict word like "Correct" or "Incorrect" -- the app adds that label itself.');
         return String.join(lines, '\n');
     }
 
@@ -239,7 +240,7 @@ public without sharing class CertStudyGenerator {
             q.optionKeys.add(newKey);
             q.optionTexts.add(optText);
             if (isCorrect) q.correct.add(newKey);
-            String e = explByKey.containsKey(keys[i]) ? cleanText(explByKey.get(keys[i])) : '';
+            String e = explByKey.containsKey(keys[i]) ? stripVerdict(cleanText(explByKey.get(keys[i]))) : '';
             if (String.isNotBlank(e)) {
                 feedbackParts.add('**' + newKey + '. ' + optText + '** -- ' + (isCorrect ? 'Correct' : 'Incorrect') + ': ' + e);
             }
@@ -363,6 +364,12 @@ public without sharing class CertStudyGenerator {
             if (idx != -1 && idx < earliest) earliest = idx;
         }
         return value.substring(0, earliest);
+    }
+
+    /** Drops a leading "Correct." / "Incorrect:" etc. -- the feedback line already carries the label. */
+    public static String stripVerdict(String value) {
+        if (value == null) return '';
+        return value.replaceFirst('(?i)^\\s*(correct|incorrect|wrong|right)\\s*[.!:\\-]*\\s+', '');
     }
 
     private static String cleanText(String value) {

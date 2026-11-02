@@ -10,10 +10,15 @@ Prompt Template generates -> custom objects hold the queue/state -> Agentforce
 (or Flow-backed Slack app) serves and grades -> Data 360 holds exam-guide
 corpus + analytics.
 
-**Status:** Steps 1-3 are built as an SFDX project in `salesforce/`. Deploy,
-data-load and Agent Builder steps are in `salesforce/README.md`. The interface
-for now is Agent Builder preview, then the Slack demo org with testers added as
-users there. Internal Slack comes later.
+**Status (Oct 30, 2026, paused):**
+
+- **Built and live in org `certstudy`:** steps 0-3, the objects, and the serving/grading logic.
+- **Data:** migrated from Heroku.
+- **Q3:** effectively passed. Serving and grading make no model calls, and the smoke test showed 0 callouts per turn.
+- **Q1:** passed (Nov 2). The depth fix is deployed. Two certs went from 0 to 5 questions plus an overview each, with no errors, at about 6-10s per question. Question and explanation quality was good. Prompt and parse tweaks followed: no mirror-image option pairs, and the doubled "Correct: Correct." label is stripped. The unlocked pre-check stops answer turns from waiting on the generation lock.
+- **Q2/Q4:** the agent is built (new Agentforce Builder) and its actions are verified in Live Test. Answer-handling fix saved, retest pending. Slack demo org not started yet. See `salesforce/AGENT_SETUP.md`.
+
+Resume steps are in `salesforce/README.md` → "Resume here" and `salesforce/AGENT_SETUP.md`.
 
 ## Pass/fail questions
 

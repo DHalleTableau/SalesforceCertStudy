@@ -5,6 +5,6 @@
         <language>en_US</language>
         <protected>false</protected>
         <shortDescription>Cert Study generation model</shortDescription>
-        <value>sfdc_ai__DefaultBedrockAnthropicClaude4Sonnet</value>
+        <value>sfdc_ai__DefaultBedrockAnthropicClaude55Sonnet</value>
     </labels>
 </CustomLabels>
