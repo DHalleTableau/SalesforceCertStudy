@@ -346,6 +346,19 @@ private class CertStudyTest {
     }
 
     @IsTest
+    static void topUpEventStartsGenerationViaTrigger() {
+        CertStudyLlm.instance = new FakeLlm();
+        markOverviewDone('AI-201');
+        activeSession('AI-201');
+        CertStudyPoolJob.useEventInTest = true;
+        Test.startTest();
+        CertStudyPoolJob.requestTopUpAsync(new Set<String>{ 'AI-201' });
+        Test.getEventBus().deliver();
+        Test.stopTest();
+        Assert.isTrue([SELECT COUNT() FROM Question__c WHERE Cert__c = :certId('AI-201')] >= 1, 'trigger started the pool job');
+    }
+
+    @IsTest
     static void lengthBiasedCandidatesFallBackAfterMaxAttempts() {
         FakeLlm fake = new FakeLlm();
         fake.biased = true;

@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomObject xmlns="http://soap.sforce.com/2006/04/metadata">
+    <deploymentStatus>Deployed</deploymentStatus>
+    <description>Learner requests a question-pool top-up; a trigger running as an internal user does the generation.</description>
+    <eventType>StandardVolume</eventType>
+    <label>Cert Study Top Up</label>
+    <pluralLabel>Cert Study Top Ups</pluralLabel>
+    <publishBehavior>PublishAfterCommit</publishBehavior>
+</CustomObject>

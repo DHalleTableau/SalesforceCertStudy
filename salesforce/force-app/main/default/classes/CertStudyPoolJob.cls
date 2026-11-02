@@ -33,6 +33,30 @@ public without sharing class CertStudyPoolJob implements Queueable, Database.All
         this.certId = certId;
     }
 
+    /** Test hook: exercise the platform-event path instead of the direct call. */
+    @TestVisible
+    private static Boolean useEventInTest = false;
+
+    /**
+     * Learner-facing entry point: publishes Cert_Study_TopUp__e so generation runs
+     * as the event subscriber's user, not the learner. Falls back to a direct call
+     * if publishing fails, and in tests unless useEventInTest is set.
+     */
+    public static void requestTopUpAsync(Set<String> certCodes) {
+        if (certCodes == null || certCodes.isEmpty()) return;
+        if (Test.isRunningTest() && !useEventInTest) {
+            requestTopUp(certCodes);
+            return;
+        }
+        String joined = String.join(new List<String>(certCodes), ';');
+        if (joined.length() > 255) {
+            requestTopUp(certCodes);
+            return;
+        }
+        Database.SaveResult sr = EventBus.publish(new Cert_Study_TopUp__e(Cert_Codes__c = joined));
+        if (!sr.isSuccess()) requestTopUp(certCodes);
+    }
+
     /** Start a job chain for each cert that has content, needs questions, and is not already locked. */
     public static void requestTopUp(Set<String> certCodes) {
         if (certCodes == null || certCodes.isEmpty()) return;

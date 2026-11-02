@@ -65,7 +65,7 @@ edits files and checks Apex syntax in the sandbox with `prettier-plugin-apex@1.1
       - **Identity = Salesforce User Id**, not email (emails aren't unique). `Study_Session__c.User__c` lookup added. A test proves two same-email users stay separate.
       - **Progress history** built and deployed: the "My progress" button shows totals, all-time weakest areas and a session/test list with re-openable details (`getHistory` / `getSessionDetail`). 27/27 tests pass. Not yet tried in the browser.
       - The LWC now targets Experience Cloud pages too.
-  0c. NEXT FOCUS: **host via Experience Cloud on this org** (before Slack). See "Hosting" below.
+  0c. IN PROGRESS: **host via Experience Cloud on this org** (before Slack). Site is built and registration works; resume at "Hosting status" below, step 1.
   1. In the builder: confirm `practice_session` has RULE 1. Send Optimizer prompt #3 if needed. Always save from the Agent Definition tab.
   2. Retest in Live Test.
   3. Identity check: is `User_Key__c` the learner's email or the agent user's? If it's the agent user, pass the end-user identity into `userKey`.
@@ -98,21 +98,27 @@ The user prefers Experience Cloud on this org over Slack, since Slack permission
 - The admin stays internal.
 - Identity already uses the User Id, so community users are separate.
 
-**FIRST, build this (next session):** decouple question generation from the learner. Today the pool job runs as whoever triggered it, and site users almost certainly can't call the Models API. Plan:
-1. The learner's request publishes a `Cert_Study_TopUp__e` platform event, instead of calling `System.enqueueJob` directly.
-2. A trigger on that event, with its running user set via PlatformEventSubscriberConfig to an internal integration/admin user, calls `CertStudyPoolJob.requestTopUp`.
-3. Keep the direct path as a fallback in tests.
+### Hosting status (Nov 2, paused mid-test; resume here)
 
-This also removes the "in-org testers need Einstein access" requirement.
+**Deployed and tested (33/33 of our tests pass):**
+- Generation decoupled from learners: `Cert_Study_TopUp__e` event + `CertStudyTopUpTrigger` + `CertStudyPoolJob.requestTopUpAsync` (event publish; direct fallback if the publish fails and in tests). `CertStudyService` learner paths use it; the hourly scheduler still calls `requestTopUp` directly. Verified: generation runs from the event. Jobs run as **Automated Process**, not the PlatformEventSubscriberConfig user (config deployed, trigger redeployed, no effect). Accepted: learners are decoupled either way.
+- `CertStudySelfRegHandler` (Auth.ConfigurableSelfRegHandler): only exact name@salesforce.com; hidden username `email + .certstudy` (usernames are unique across ALL orgs; employee emails likely taken elsewhere, e.g. Org62); assigns **`CertStudy_External`** via @future.
+- **`CertStudy_External`** perm set (controller class + event create only). The first version assigned `CertStudy_User`, which failed ("user license doesn't allow Assigned Apps") because it carries app/tab visibility; `CertStudy_User` stays for internal users.
+- `CertStudyLoginDiscoveryHandler` (Auth.LoginDiscoveryHandler): learners type only their email, get an email one-time code (`Site.passwordlessLogin`); matches only active `.certstudy` users, so an internal user with the same email never matches. **Deployed, NOT yet configured on the site or tried.**
 
-Then confirm in testing that site users can run the `CertStudyController` Apex (via a perm set) and that `without sharing` service access works for them.
+**Site (manual, in the org):** LWR site "Salesforce Cert Study", URL `https://trailsignup-5d9fea1e5cdf7f.my.site.com/sfcertstudy`, **published** (check; it was about to be). Public access off. `certStudy` is on Home. Administration > Login & Registration: self-registration on, Configurable Self-Reg Page, handler `CertStudySelfRegHandler`, executes as Daniel Halle, email verification, include password, profile **External Apps Login User** (a member of the site), account "Cert Study Learners". Account created.
 
-**Steps to work out:**
-- enable Digital Experiences;
-- create an LWR site and put the `certStudy` component on its home page;
-- decide on the login model: employees as internal users vs external (community) users with self-registration or SSO;
-- a site/member permission set: CertStudy_User plus Einstein generative AI access for generation;
-- the employee-direct-login setting.
+**Test results so far:** a non-logged-in visitor can't get in; self-registration form works and sends the verification email. Registered user `daniel.halle@salesforce.com.certstudy` hit "The Apex request is invalid" (no class access, perm set assignment had failed). Fixed by `CertStudy_External` + `scripts/assign_external_permset.apex` (assigned to that user, succeeded). **Not yet re-tested after the fix.**
+
+**Next steps, in order:**
+1. Reload the site as the registered user (incognito): the cert list should load. Start a practice session, answer a question, open My progress. If no questions arrive, check `AsyncApexJob` for `CertStudyPoolJob` (and `Last_Generation_Error__c` on the cert).
+2. Administration > Login & Registration: set **Login Page Type** to the Login Discovery option, handler `CertStudyLoginDiscoveryHandler`, Execute As Daniel. If the option is missing for LWR in this release, fall back to username (email + `.certstudy`) login or revisit. Unknown: passwordless email login may need a verified email on the user.
+3. Log out and log in with just the email. Also test a non-@salesforce.com registration (must be rejected, no user/contact created) and a second user (e.g. `daniel.halle+cert@salesforce.com`) to confirm two users stay separate.
+4. Verify email verification happens BEFORE the handler runs (otherwise add a check in the handler).
+5. Polish: make the Sign Up link more prominent on the login page.
+6. Ask in #q-branch-sdo whether a persisting SDO may host this; call it a pilot. Back up the data (CSV export + rebuild script).
+
+**Gotchas:** `RunLocalTests` fails ~27% on pre-installed SDO/B2B tests, so always run only our classes: `--class-names CertStudyTest --class-names CertStudyControllerTest --class-names CertStudySelfRegHandlerTest --class-names CertStudyLoginDiscoveryHandlerTest`. Run `sf` from the `salesforce/` folder (the DX project root), not the repo root. Every Apex class needs its `-meta.xml`. `scripts/` is `.forceignore`d.
 
 ## Local Environment Notes (retired Heroku build — read before touching git or pip)
 

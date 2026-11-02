@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<PlatformEventSubscriberConfig xmlns="http://soap.sforce.com/2006/04/metadata">
+    <batchSize>10</batchSize>
+    <isProtected>false</isProtected>
+    <masterLabel>CertStudyTopUpConfig</masterLabel>
+    <platformEventConsumer>CertStudyTopUpTrigger</platformEventConsumer>
+    <user>trailsignup.5d9fea1e5cdf7f@salesforce.com</user>
+</PlatformEventSubscriberConfig>

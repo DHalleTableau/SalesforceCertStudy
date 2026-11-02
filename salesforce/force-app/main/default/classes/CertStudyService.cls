@@ -249,7 +249,7 @@ public without sharing class CertStudyService {
             Last_Activity__c = DateTime.now()
         );
         insert s;
-        CertStudyPoolJob.requestTopUp(new Set<String>(codes));
+        CertStudyPoolJob.requestTopUpAsync(new Set<String>(codes));
         out.session = s;
         return out;
     }
@@ -260,7 +260,7 @@ public without sharing class CertStudyService {
         if (current != null) return current;
         Set<String> codes = sessionCodes(s);
         Question__c claimed = claimFromPool(s.Id, codes);
-        CertStudyPoolJob.requestTopUp(codes);
+        CertStudyPoolJob.requestTopUpAsync(codes);
         return claimed;
     }
 
@@ -457,7 +457,7 @@ public without sharing class CertStudyService {
             Last_Activity__c = DateTime.now()
         );
         insert s;
-        CertStudyPoolJob.requestTopUp(new Set<String>{ c.Cert_Code__c });
+        CertStudyPoolJob.requestTopUpAsync(new Set<String>{ c.Cert_Code__c });
         out.session = s;
         out.certs.add(c);
         return out;

@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<PermissionSet xmlns="http://soap.sforce.com/2006/04/metadata">
+    <classAccesses>
+        <apexClass>CertStudyController</apexClass>
+        <enabled>true</enabled>
+    </classAccesses>
+    <description>Experience Cloud learners: runs the certStudy component. No app or tab settings, which external licenses do not allow. Data access happens in Apex system mode.</description>
+    <hasActivationRequired>false</hasActivationRequired>
+    <label>Cert Study External</label>
+    <objectPermissions>
+        <allowCreate>true</allowCreate>
+        <allowDelete>false</allowDelete>
+        <allowEdit>false</allowEdit>
+        <allowRead>true</allowRead>
+        <modifyAllRecords>false</modifyAllRecords>
+        <object>Cert_Study_TopUp__e</object>
+        <viewAllRecords>false</viewAllRecords>
+    </objectPermissions>
+</PermissionSet>

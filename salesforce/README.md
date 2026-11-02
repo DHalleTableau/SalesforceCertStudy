@@ -172,3 +172,13 @@ Activate the agent, then test in the **Agent Builder preview**:
 - **Chain depth:** Trial/Developer Edition orgs cap chained Queueables at depth 5. `CertStudyPoolJob` starts each chain with an explicit max of 5. At the cap it stops cleanly and schedules a one-off `Cert Study restart …` job about 1 minute out. The hourly scheduler and every question claim also restart stalled pools.
 - **Not ported yet:** CSV export (the summary action covers review for now), the contributions queue, and weak-domain targeting.
 - **Adding material for now:** give it to Claude in a session, or create a `Cert Resource` record on the cert, paste the text into Content, and set the Role.
+
+## Experience Cloud site (Nov 2, in progress)
+
+Learners self-register on an LWR site (`/sfcertstudy`) as External Apps Login users, restricted to @salesforce.com emails.
+Apex: `CertStudySelfRegHandler` (registration), `CertStudyLoginDiscoveryHandler` (email-only login, not yet configured on the site), perm set `CertStudy_External` (no app/tab settings; external licenses reject them).
+Question generation is requested through the `Cert_Study_TopUp__e` platform event so learners never call the Models API.
+`scripts/assign_external_permset.apex` assigns the external perm set to any `.certstudy` user that missed it.
+Full status and next steps: `PLAN.md` > "Hosting status".
+Run tests with only our classes (RunLocalTests also runs failing SDO sample tests):
+`sf apex run test --target-org certstudy --class-names CertStudyTest --class-names CertStudyControllerTest --class-names CertStudySelfRegHandlerTest --class-names CertStudyLoginDiscoveryHandlerTest --wait 10`
