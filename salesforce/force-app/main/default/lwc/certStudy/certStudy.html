@@ -1,10 +1,25 @@
 <template>
     <lightning-card title="Cert Study" icon-name="standard:education">
         <div slot="actions">
-            <template lwc:if={inSession}>
+            <template lwc:if={showHistoryButton}>
+                <lightning-button label="My progress" icon-name="utility:trending" onclick={showHistory}
+                    class="slds-m-right_x-small"></lightning-button>
+            </template>
+            <template lwc:if={inPractice}>
                 <lightning-button-group>
                     <lightning-button label="Summary" onclick={showSummary} disabled={busy}></lightning-button>
                     <lightning-button label="End session" onclick={endSession} disabled={busy}></lightning-button>
+                </lightning-button-group>
+            </template>
+            <template lwc:if={inTest}>
+                <lightning-button-group>
+                    <template lwc:if={isPaused}>
+                        <lightning-button label="Resume" variant="brand" onclick={resume} disabled={busy}></lightning-button>
+                    </template>
+                    <template lwc:else>
+                        <lightning-button label="Pause" onclick={pause} disabled={busy}></lightning-button>
+                    </template>
+                    <lightning-button label="End test" onclick={confirmEndTest} disabled={busy}></lightning-button>
                 </lightning-button-group>
             </template>
         </div>
@@ -23,10 +38,18 @@
 
             <!-- choose certifications -->
             <template lwc:if={isSelect}>
-                <p class="slds-text-body_regular slds-m-bottom_small">
-                    Pick one or more certifications to practice. Questions rotate between them, and you'll see
-                    whether you were right — and why — after every answer.
-                </p>
+                <lightning-radio-group name="mode" label="Mode" options={modeOptions} value={mode}
+                    onchange={handleMode} class="slds-m-bottom_small"></lightning-radio-group>
+                <template lwc:if={isTestMode}>
+                    <lightning-radio-group name="timer" label="Would you like a strict timer or open time?"
+                        options={timerOptions} value={timerChoice} onchange={handleTimer}
+                        class="slds-m-bottom_x-small"></lightning-radio-group>
+                    <p class="slds-text-color_weak slds-m-bottom_small">
+                        Either way you can pause and return later — the current question is hidden while paused,
+                        and the clock only runs while a question is on screen.
+                    </p>
+                </template>
+                <p class="slds-text-body_regular slds-m-bottom_small">{selectHelp}</p>
                 <lightning-input type="search" label="Search certifications" value={filterText}
                     onchange={handleFilter} class="slds-m-bottom_small"></lightning-input>
                 <template lwc:if={selectedCount}>
@@ -46,7 +69,7 @@
                     </template>
                 </div>
                 <div class="slds-m-top_small">
-                    <lightning-button variant="brand" label="Start practice" onclick={start}
+                    <lightning-button variant="brand" label={startLabel} onclick={start}
                         disabled={noneSelected}></lightning-button>
                 </div>
             </template>
@@ -69,7 +92,21 @@
             <template lwc:if={inSession}>
                 <div class="slds-grid slds-wrap slds-grid_align-spread slds-m-bottom_small session-bar">
                     <div class="slds-text-color_weak slds-truncate" title={sessionCertNames}>{sessionCertNames}</div>
-                    <div class="slds-text-title_bold">{scoreText}</div>
+                    <div class="slds-text-title_bold">
+                        {scoreText}
+                        <template lwc:if={inTest}>
+                            <span class="slds-m-left_medium"><span class={timerClass}>{timerText}</span></span>
+                        </template>
+                    </div>
+                </div>
+            </template>
+
+            <!-- paused test: question hidden -->
+            <template lwc:if={isPaused}>
+                <div class="slds-box slds-theme_shade slds-text-align_center slds-p-around_large">
+                    <p class="slds-text-heading_medium slds-m-bottom_x-small">Test paused</p>
+                    <p class="slds-m-bottom_medium">The clock is stopped and your question is hidden. Pick up whenever you're ready.</p>
+                    <lightning-button variant="brand" label="Resume test" onclick={resume} disabled={busy}></lightning-button>
                 </div>
             </template>
 
@@ -86,7 +123,7 @@
                     </template>
                 </div>
                 <div class="slds-grid slds-grid_vertical-align-center slds-m-top_small">
-                    <lightning-button variant="brand" label="Submit answer" onclick={submit}
+                    <lightning-button variant="brand" label={submitLabel} onclick={submit}
                         disabled={submitDisabled}></lightning-button>
                     <span class="slds-m-left_small slds-text-color_weak">{chooseText} Tip: press A–E, then Enter.</span>
                 </div>
@@ -147,7 +184,10 @@
                 <template lwc:else>
                     <div class="waiting">
                         <lightning-spinner alternative-text="Generating" size="small"></lightning-spinner>
-                        <p class="slds-m-left_x-large">Generating your next question — usually under a minute…</p>
+                        <p class="slds-m-left_x-large">
+                            Generating your next question — usually under a minute…
+                            <template lwc:if={inTest}> The test clock is stopped while you wait.</template>
+                        </p>
                     </div>
                 </template>
             </template>
@@ -185,7 +225,107 @@
                         <lightning-button variant="brand" label="Continue practicing" onclick={continuePractice}
                             class="slds-m-right_x-small"></lightning-button>
                     </template>
+                    <template lwc:if={fromHistory}>
+                        <lightning-button label="Back to my progress" onclick={backToHistory}
+                            class="slds-m-right_x-small"></lightning-button>
+                    </template>
                     <lightning-button label="Start a new session" onclick={newSession}></lightning-button>
+                </div>
+            </template>
+            <!-- test result -->
+            <template lwc:if={isTestResult}>
+                <div class={resultBannerClass}>
+                    <p class="slds-text-heading_large">{resultHeadline}</p>
+                    <p>{resultDetail}</p>
+                </div>
+                <template lwc:if={testResult.incomplete}>
+                    <div class="slds-box slds-theme_shade slds-m-bottom_medium"><p>{incompleteNote}</p></div>
+                </template>
+                <p class="slds-text-color_weak slds-m-bottom_medium">{timeNote}</p>
+
+                <p class="slds-text-title_caps slds-m-bottom_x-small">By section</p>
+                <template for:each={testResult.domains} for:item="d">
+                    <div key={d.key} class="area slds-m-bottom_small">
+                        <div class="slds-grid slds-grid_align-spread slds-grid_vertical-align-center">
+                            <span>{d.name} <span class="slds-text-color_weak">{d.weightText}</span></span>
+                            <span>
+                                <span class="slds-text-title_bold slds-m-right_x-small">{d.scoreText}</span>
+                                <template lwc:if={d.verdict}><span class={d.verdictClass}>{d.verdict}</span></template>
+                            </span>
+                        </div>
+                        <div class="bar"><div class="bar-fill" style={d.barStyle}></div></div>
+                    </div>
+                </template>
+
+                <p class="slds-text-title_caps slds-m-top_medium slds-m-bottom_x-small">What to focus on next time</p>
+                <ul class="slds-list_dotted slds-m-bottom_medium">
+                    <template for:each={testResult.recommendations} for:item="r">
+                        <li key={r.key}>{r.text}</li>
+                    </template>
+                </ul>
+
+                <template lwc:if={hasResultMissed}>
+                    <p class="slds-text-title_caps slds-m-bottom_x-small">Questions to review</p>
+                    <template for:each={testResult.missed} for:item="m">
+                        <details key={m.key} class="missed slds-m-bottom_x-small">
+                            <summary>{m.stem}</summary>
+                            <p class="slds-m-top_x-small"><strong>Correct:</strong> {m.correctAnswer}</p>
+                            <p><strong>You chose:</strong> {m.yourAnswer}</p>
+                            <template for:each={m.feedbackBlocks} for:item="b">
+                                <p key={b.key} class="explanation slds-m-top_x-small">{b.text}</p>
+                            </template>
+                        </details>
+                    </template>
+                </template>
+                <div class="slds-m-top_medium">
+                    <template lwc:if={fromHistory}>
+                        <lightning-button label="Back to my progress" onclick={backToHistory}
+                            class="slds-m-right_x-small"></lightning-button>
+                    </template>
+                    <lightning-button variant="brand" label="Start something new" onclick={newSession}></lightning-button>
+                </div>
+            </template>
+
+            <!-- progress history -->
+            <template lwc:if={isHistory}>
+                <p class="slds-text-heading_medium">{historyHeadline}</p>
+                <p class="slds-text-color_weak slds-m-bottom_medium">{historySubline}</p>
+
+                <template lwc:if={hasWeakAreas}>
+                    <p class="slds-text-title_caps slds-m-bottom_x-small">Weakest areas across all sessions</p>
+                    <template for:each={history.weakAreas} for:item="a">
+                        <div key={a.key} class="area slds-m-bottom_x-small">
+                            <div class="slds-grid slds-grid_align-spread">
+                                <span>{a.label}</span>
+                                <span class="slds-text-title_bold">{a.pct}% ({a.correct}/{a.total})</span>
+                            </div>
+                            <div class="bar"><div class="bar-fill" style={a.barStyle}></div></div>
+                        </div>
+                    </template>
+                </template>
+
+                <template lwc:if={hasHistorySessions}>
+                    <p class="slds-text-title_caps slds-m-top_medium slds-m-bottom_x-small">Sessions and tests</p>
+                    <template for:each={history.sessions} for:item="x">
+                        <div key={x.id} class="history-row slds-grid slds-grid_vertical-align-center slds-p-vertical_x-small">
+                            <div class="slds-col slds-size_3-of-12 slds-text-color_weak">{x.when}</div>
+                            <div class="slds-col slds-size_1-of-12">{x.modeLabel}</div>
+                            <div class="slds-col slds-size_4-of-12 slds-truncate" title={x.certNames}>{x.certNames}</div>
+                            <div class="slds-col slds-size_2-of-12">
+                                {x.scoreText}
+                                <template lwc:if={x.badge}><span class={x.badgeClass}>{x.badge}</span></template>
+                            </div>
+                            <div class="slds-col slds-size_2-of-12 slds-text-align_right">
+                                <template lwc:if={x.canOpen}>
+                                    <lightning-button variant="base" label="View" data-id={x.id}
+                                        onclick={openPastSession}></lightning-button>
+                                </template>
+                            </div>
+                        </div>
+                    </template>
+                </template>
+                <div class="slds-m-top_medium">
+                    <lightning-button variant="brand" label="Start practicing" onclick={newSession}></lightning-button>
                 </div>
             </template>
         </div>

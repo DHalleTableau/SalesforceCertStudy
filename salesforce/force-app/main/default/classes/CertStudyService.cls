@@ -20,12 +20,31 @@ public without sharing class CertStudyService {
     /** Agents sometimes re-call SubmitAnswer in one turn; identical answers this close together are ignored. */
     public static final Integer DUPLICATE_WINDOW_SECONDS = 10;
     public static final String DUPLICATE_PREFIX = 'DUPLICATE_IGNORED';
+    public static final String MODE_PRACTICE = 'Practice';
+    public static final String MODE_TEST = 'Test';
+    /** Ready questions kept per cert; larger while someone is taking a test on it. */
+    public static final Integer TEST_POOL_TARGET = 10;
+    public static final Integer DEFAULT_TEST_QUESTIONS = 60;
+    public static final Integer DEFAULT_TEST_MINUTES = 105;
+    public static final Integer DEFAULT_PASSING_SCORE = 65;
+    public static final Integer MAX_RECOMMENDATIONS = 5;
 
     // ------------------------------------------------------------- identity
 
+    /**
+     * Learner identity. Blank = the logged-in Salesforce user's 18-character Id
+     * (unique per person, including Experience Cloud users; emails are NOT unique
+     * in Salesforce -- e.g. agent users all share noreply@salesforce.com).
+     * A supplied key (e.g. the agent's EndUserId or a Slack user Id) is used as-is.
+     */
     public static String resolveUserKey(String userKey) {
-        String k = String.isBlank(userKey) ? UserInfo.getUserEmail() : userKey;
-        return k.trim().toLowerCase();
+        if (String.isBlank(userKey)) return UserInfo.getUserId();
+        return userKey.trim();
+    }
+
+    /** User__c lookup value for a session: set when the key is the running user's Id. */
+    public static Id userIdFor(String key) {
+        return key == UserInfo.getUserId() ? UserInfo.getUserId() : null;
     }
 
     // ---------------------------------------------------------------- certs
@@ -222,7 +241,9 @@ public without sharing class CertStudyService {
         endSessions([SELECT Id FROM Study_Session__c WHERE User_Key__c = :key AND Status__c = :ACTIVE]);
         Study_Session__c s = new Study_Session__c(
             User_Key__c = key,
+            User__c = userIdFor(key),
             Cert_Codes__c = delimited,
+            Mode__c = MODE_PRACTICE,
             Status__c = ACTIVE,
             Started_At__c = DateTime.now(),
             Last_Activity__c = DateTime.now()
@@ -308,7 +329,7 @@ public without sharing class CertStudyService {
     /** Most recent session for the user (active first by recency); null if none. */
     public static Study_Session__c latestSession(String key) {
         List<Study_Session__c> sessions = [
-            SELECT Id, Cert_Codes__c, Status__c, Started_At__c
+            SELECT Id, Cert_Codes__c, Status__c, Started_At__c, Mode__c, Question_Target__c, Timer_Mode__c, Time_Limit_Min__c, Elapsed_Seconds__c, Resumed_At__c, Paused__c, Completed_At__c
             FROM Study_Session__c
             WHERE User_Key__c = :key
             ORDER BY Started_At__c DESC
@@ -363,6 +384,296 @@ public without sharing class CertStudyService {
         return out;
     }
 
+    // ----------------------------------------------------------- test mode
+    //
+    // Clock rule: time accumulates only while a question is on screen
+    // (Resumed_At__c != null). It stops when the learner pauses AND while the
+    // learner waits for a question to be generated, so generation never eats
+    // into a strict time limit.
+
+    public class DomainResult {
+        public String name;
+        public Decimal weight;
+        public Integer quota = 0;
+        public Integer answered = 0;
+        public Integer correct = 0;
+        public Integer pctOfAnswered() { return CertStudyService.pct(correct, answered); }
+    }
+
+    public class TestResult {
+        public Cert__c cert;
+        public Integer target = 0;
+        public Integer answered = 0;
+        public Integer correct = 0;
+        public Integer unanswered = 0;
+        public Integer passing;
+        public Boolean passingEstimated = false;
+        public Integer officialPct = 0;   // correct / target (unanswered count as wrong)
+        public Boolean passed = false;
+        public Integer answeredPct = 0;   // correct / answered
+        public Boolean answeredLikelyPass = false;
+        public Boolean incomplete = false;
+        public Boolean timedOut = false;
+        public Integer elapsedSeconds = 0;
+        public Integer limitMin;
+        public Boolean strictTimer = false;
+        public List<DomainResult> domains = new List<DomainResult>();
+        public List<String> recommendations = new List<String>();
+        public List<Answer__c> missed = new List<Answer__c>();
+    }
+
+    public static Boolean isTest(Study_Session__c s) {
+        return s != null && s.Mode__c == MODE_TEST;
+    }
+
+    public static StartOutcome startTestCore(String key, String certCode, Boolean strictTimer) {
+        StartOutcome out = new StartOutcome();
+        Cert__c c = String.isBlank(certCode) ? null : certsByUpperCode().get(certCode.trim().toUpperCase());
+        if (c == null) {
+            out.error = 'Pick a certification for the test.';
+            return out;
+        }
+        if (c.Is_Aggregate__c) {
+            out.error = c.Name + ' has no exam of its own (it is earned via its prerequisites). Pick one of those for a test.';
+            return out;
+        }
+        if (c.Grounding_Chars__c == null || c.Grounding_Chars__c == 0) {
+            out.error = c.Name + ' has no study material loaded yet, so test questions cannot be generated.';
+            return out;
+        }
+        endSessions([SELECT Id FROM Study_Session__c WHERE User_Key__c = :key AND Status__c = :ACTIVE]);
+        Study_Session__c s = new Study_Session__c(
+            User_Key__c = key,
+            User__c = userIdFor(key),
+            Cert_Codes__c = ';' + c.Id + ';',
+            Mode__c = MODE_TEST,
+            Status__c = ACTIVE,
+            Question_Target__c = c.Num_Questions__c != null ? c.Num_Questions__c : DEFAULT_TEST_QUESTIONS,
+            Time_Limit_Min__c = c.Duration_Min__c != null ? c.Duration_Min__c : DEFAULT_TEST_MINUTES,
+            Timer_Mode__c = strictTimer == true ? 'Strict' : 'Open',
+            Elapsed_Seconds__c = 0,
+            Paused__c = false,
+            Started_At__c = DateTime.now(),
+            Last_Activity__c = DateTime.now()
+        );
+        insert s;
+        CertStudyPoolJob.requestTopUp(new Set<String>{ c.Cert_Code__c });
+        out.session = s;
+        out.certs.add(c);
+        return out;
+    }
+
+    public static Integer elapsedSeconds(Study_Session__c s) {
+        Decimal base = s.Elapsed_Seconds__c == null ? 0 : s.Elapsed_Seconds__c;
+        if (s.Resumed_At__c != null) {
+            base += (DateTime.now().getTime() - s.Resumed_At__c.getTime()) / 1000;
+        }
+        return base.intValue();
+    }
+
+    public static Boolean isTimeUp(Study_Session__c s) {
+        return isTest(s) && s.Timer_Mode__c == 'Strict' && s.Time_Limit_Min__c != null
+            && elapsedSeconds(s) >= s.Time_Limit_Min__c * 60;
+    }
+
+    /** Folds the running stretch into Elapsed_Seconds__c and stops the clock (caller updates). */
+    private static void stopClock(Study_Session__c s) {
+        s.Elapsed_Seconds__c = elapsedSeconds(s);
+        s.Resumed_At__c = null;
+    }
+
+    public static void pauseTest(Study_Session__c s) {
+        stopClock(s);
+        s.Paused__c = true;
+        s.Last_Activity__c = DateTime.now();
+        update s;
+    }
+
+    /** The clock restarts when the next question is actually shown (testQuestion). */
+    public static void resumeTest(Study_Session__c s) {
+        s.Paused__c = false;
+        s.Last_Activity__c = DateTime.now();
+        update s;
+    }
+
+    /**
+     * The question to show in a test (claims one if needed), maintaining the
+     * clock. Null while paused, while generating, or once the target is reached.
+     */
+    public static Question__c testQuestion(Study_Session__c s, Integer answered) {
+        if (s.Paused__c == true) return null;
+        Question__c q = null;
+        if (answered < s.Question_Target__c) q = nextQuestionRecord(s);
+        if (q != null && s.Resumed_At__c == null) {
+            s.Resumed_At__c = DateTime.now();
+            update s;
+        } else if (q == null && s.Resumed_At__c != null) {
+            stopClock(s);
+            update s;
+        }
+        return q;
+    }
+
+    /** Scores the test and ends the session. */
+    public static TestResult finishTest(Study_Session__c s, Boolean timedOut) {
+        if (s.Completed_At__c == null) {
+            stopClock(s);
+            s.Completed_At__c = DateTime.now();
+            s.Paused__c = false;
+            update s;
+        }
+        TestResult r = testResult(s);
+        r.timedOut = timedOut == true;
+        if (s.Status__c == ACTIVE) {
+            endSessions(new List<Study_Session__c>{ s });
+            s.Status__c = ENDED;
+        }
+        return r;
+    }
+
+    /** Domain quotas for a test of n questions (largest-remainder rounding of the official weights). */
+    public static Map<String, Integer> domainQuotas(Cert__c c, Integer n) {
+        Map<String, Integer> quotas = new Map<String, Integer>();
+        List<Map<String, Object>> doms = CertStudyGenerator.domains(c);
+        if (doms.isEmpty() || n == null || n <= 0) return quotas;
+        Decimal sumW = 0;
+        List<Decimal> ws = new List<Decimal>();
+        for (Map<String, Object> d : doms) {
+            Decimal w = 1;
+            try {
+                if (d.get('weight_pct') != null) w = Decimal.valueOf(String.valueOf(d.get('weight_pct')));
+            } catch (Exception e) {
+                w = 1;
+            }
+            if (w <= 0) w = 1;
+            ws.add(w);
+            sumW += w;
+        }
+        Integer assigned = 0;
+        List<Decimal> remainders = new List<Decimal>();
+        for (Integer i = 0; i < doms.size(); i++) {
+            Decimal exact = ws[i] / sumW * n;
+            Integer fl = exact.round(System.RoundingMode.DOWN).intValue();
+            quotas.put(String.valueOf(doms[i].get('name')), fl);
+            remainders.add(exact - fl);
+            assigned += fl;
+        }
+        while (assigned < n) {
+            Integer best = 0;
+            for (Integer i = 1; i < remainders.size(); i++) {
+                if (remainders[i] > remainders[best]) best = i;
+            }
+            String name = String.valueOf(doms[best].get('name'));
+            quotas.put(name, quotas.get(name) + 1);
+            remainders[best] = -1;
+            assigned++;
+        }
+        return quotas;
+    }
+
+    public static TestResult testResult(Study_Session__c s) {
+        TestResult r = new TestResult();
+        Set<String> codes = sessionCodes(s);
+        List<Cert__c> certs = [
+            SELECT Id, Name, Cert_Code__c, Num_Questions__c, Duration_Min__c, Passing_Score__c, Domains_JSON__c
+            FROM Cert__c WHERE Cert_Code__c IN :codes LIMIT 1
+        ];
+        r.cert = certs.isEmpty() ? null : certs[0];
+        r.target = s.Question_Target__c == null ? 0 : s.Question_Target__c.intValue();
+        r.limitMin = s.Time_Limit_Min__c == null ? null : s.Time_Limit_Min__c.intValue();
+        r.strictTimer = s.Timer_Mode__c == 'Strict';
+        r.elapsedSeconds = elapsedSeconds(s);
+        r.passingEstimated = r.cert == null || r.cert.Passing_Score__c == null;
+        r.passing = r.passingEstimated ? DEFAULT_PASSING_SCORE : r.cert.Passing_Score__c.intValue();
+
+        Map<String, DomainResult> byName = new Map<String, DomainResult>();
+        if (r.cert != null) {
+            Map<String, Integer> quotas = domainQuotas(r.cert, r.target);
+            for (Map<String, Object> d : CertStudyGenerator.domains(r.cert)) {
+                DomainResult dr = new DomainResult();
+                dr.name = String.valueOf(d.get('name'));
+                try {
+                    dr.weight = d.get('weight_pct') == null ? null : Decimal.valueOf(String.valueOf(d.get('weight_pct')));
+                } catch (Exception e) {
+                    dr.weight = null;
+                }
+                dr.quota = quotas.containsKey(dr.name) ? quotas.get(dr.name) : 0;
+                byName.put(dr.name, dr);
+                r.domains.add(dr);
+            }
+        }
+        for (Answer__c a : [
+            SELECT Is_Correct__c, User_Answer__c, Question__r.Stem__c, Question__r.Domain__c,
+                Question__r.Correct_JSON__c, Question__r.Options_JSON__c, Question__r.Feedback_MD__c,
+                Question__r.Cert__r.Name
+            FROM Answer__c WHERE Study_Session__c = :s.Id ORDER BY Answered_At__c
+        ]) {
+            r.answered++;
+            if (a.Is_Correct__c) r.correct++;
+            else r.missed.add(a);
+            String dn = String.isBlank(a.Question__r.Domain__c) ? 'Other' : a.Question__r.Domain__c;
+            DomainResult dr = byName.get(dn);
+            if (dr == null) {
+                dr = new DomainResult();
+                dr.name = dn;
+                byName.put(dn, dr);
+                r.domains.add(dr);
+            }
+            dr.answered++;
+            if (a.Is_Correct__c) dr.correct++;
+        }
+        r.unanswered = Math.max(0, r.target - r.answered);
+        r.incomplete = r.unanswered > 0;
+        r.officialPct = pct(r.correct, r.target > 0 ? r.target : r.answered);
+        r.passed = r.officialPct >= r.passing;
+        r.answeredPct = pct(r.correct, r.answered);
+        r.answeredLikelyPass = r.answered > 0 && r.answeredPct >= r.passing;
+
+        // Recommendations: weakest high-weight sections first, then sections never reached.
+        Map<String, String> ranked = new Map<String, String>();
+        List<String> notReached = new List<String>();
+        for (DomainResult dr : r.domains) {
+            String weightText = dr.weight == null ? '' : ' (' + dr.weight.setScale(0) + '% of the exam)';
+            if (dr.answered == 0) {
+                if (dr.quota > 0) notReached.add(dr.name + (dr.weight == null ? '' : ' (' + dr.weight.setScale(0) + '%)'));
+                continue;
+            }
+            Integer p = dr.pctOfAnswered();
+            if (p < r.passing) {
+                Decimal w = dr.weight == null ? 1 : dr.weight;
+                Decimal priority = w * (r.passing - p);
+                String sortKey = String.valueOf(100000000 - priority.setScale(0).intValue()).leftPad(10, '0') + '|' + dr.name;
+                ranked.put(sortKey, 'Focus on ' + dr.name + weightText + ': you scored ' + p + '% (' + dr.correct + '/' + dr.answered + ') against a ' + r.passing + '% pass mark.');
+            }
+        }
+        List<String> keys = new List<String>(ranked.keySet());
+        keys.sort();
+        for (String k : keys) {
+            if (r.recommendations.size() >= MAX_RECOMMENDATIONS) break;
+            r.recommendations.add(ranked.get(k));
+        }
+        if (keys.size() > MAX_RECOMMENDATIONS) {
+            r.recommendations.add((keys.size() - MAX_RECOMMENDATIONS) + ' more section(s) were below the pass mark -- see the section list above.');
+        }
+        if (!notReached.isEmpty()) {
+            r.recommendations.add('Not reached -- practice these before the real exam: ' + String.join(notReached, ', ') + '.');
+        }
+        if (r.recommendations.isEmpty()) {
+            r.recommendations.add('You were at or above the pass mark in every section you attempted. Keep practicing to stay sharp.');
+        }
+        return r;
+    }
+
+    /** Ready-pool size to keep for a cert: larger while an active test needs it. */
+    public static Integer poolTarget(Id certId) {
+        String likeTerm = '%;' + String.valueOf(certId) + ';%';
+        Integer tests = [
+            SELECT COUNT() FROM Study_Session__c
+            WHERE Status__c = :ACTIVE AND Mode__c = :MODE_TEST AND Cert_Codes__c LIKE :likeTerm
+        ];
+        return tests > 0 ? TEST_POOL_TARGET : CertStudyGenerator.POOL_SIZE;
+    }
+
     // ------------------------------------------------- agent (markdown) API
 
     public static String startSession(String userKey, String certCodesText, String prereqAnswersText) {
@@ -401,12 +712,14 @@ public without sharing class CertStudyService {
     public static String nextQuestion(String userKey) {
         Study_Session__c s = activeSession(resolveUserKey(userKey));
         if (s == null) return noSessionMessage();
+        if (isTest(s)) return 'You have a mock test in progress. Tests run in the Cert Study app in Salesforce; open it to continue, or start a new practice session here (that ends the test).';
         return serveNext(s);
     }
 
     public static String submitAnswer(String userKey, String answerText) {
         Study_Session__c s = activeSession(resolveUserKey(userKey));
         if (s == null) return noSessionMessage();
+        if (isTest(s)) return 'You have a mock test in progress. Tests run in the Cert Study app in Salesforce; open it to continue, or start a new practice session here (that ends the test).';
 
         GradeOutcome g = gradeCore(s, parseLetters(answerText));
         if (g.status == 'duplicate') {
@@ -435,6 +748,7 @@ public without sharing class CertStudyService {
     public static String sessionSummary(String userKey, Boolean endIt) {
         Study_Session__c s = latestSession(resolveUserKey(userKey));
         if (s == null) return 'You have no practice sessions yet. ' + noSessionMessage();
+        if (isTest(s) && s.Status__c == ACTIVE) return 'You have a mock test in progress. Tests run in the Cert Study app in Salesforce; open it to continue, or start a new practice session here (that ends the test).';
         SummaryData d = summaryCore(s, endIt);
 
         List<String> lines = new List<String>();
@@ -494,7 +808,7 @@ public without sharing class CertStudyService {
 
     public static Study_Session__c activeSession(String key) {
         List<Study_Session__c> rows = [
-            SELECT Id, Cert_Codes__c, Status__c FROM Study_Session__c
+            SELECT Id, Cert_Codes__c, Status__c, Started_At__c, Mode__c, Question_Target__c, Timer_Mode__c, Time_Limit_Min__c, Elapsed_Seconds__c, Resumed_At__c, Paused__c, Completed_At__c FROM Study_Session__c
             WHERE User_Key__c = :key AND Status__c = :ACTIVE
             ORDER BY Started_At__c DESC LIMIT 1
         ];
@@ -528,6 +842,10 @@ public without sharing class CertStudyService {
      * candidates are shuffled in Apex, then lock-and-rechecked one at a time.
      */
     private static Question__c claimFromPool(Id sessionId, Set<String> codes) {
+        List<Study_Session__c> sess = [
+            SELECT Id, Mode__c, Question_Target__c, Cert_Codes__c FROM Study_Session__c WHERE Id = :sessionId
+        ];
+        if (!sess.isEmpty() && isTest(sess[0])) return claimForTest(sess[0], codes);
         Set<String> recentDomains = new Set<String>();
         Id lastCert = null;
         for (Question__c r : [
@@ -557,6 +875,10 @@ public without sharing class CertStudyService {
             shuffleRecords(b);
             candidates.addAll(b);
         }
+        return lockAndClaim(sessionId, candidates);
+    }
+
+    private static Question__c lockAndClaim(Id sessionId, List<Question__c> candidates) {
         for (Question__c c : candidates) {
             List<Question__c> locked = [
                 SELECT Id FROM Question__c
@@ -572,6 +894,55 @@ public without sharing class CertStudyService {
             return currentQuestion(sessionId);
         }
         return null;
+    }
+
+    /**
+     * Test mode: serve domains in proportion to the official weights. Prefers
+     * the domain furthest below its quota; falls back to any Ready question
+     * so the test never stalls on one domain's generation.
+     */
+    private static Question__c claimForTest(Study_Session__c s, Set<String> codes) {
+        List<Cert__c> certs = [SELECT Id, Domains_JSON__c FROM Cert__c WHERE Cert_Code__c IN :codes LIMIT 1];
+        Map<String, Integer> quotas = certs.isEmpty()
+            ? new Map<String, Integer>()
+            : domainQuotas(certs[0], s.Question_Target__c == null ? DEFAULT_TEST_QUESTIONS : s.Question_Target__c.intValue());
+        Map<String, Integer> served = new Map<String, Integer>();
+        for (AggregateResult ar : [
+            SELECT Domain__c d, COUNT(Id) n FROM Question__c WHERE Study_Session__c = :s.Id GROUP BY Domain__c
+        ]) {
+            served.put((String) ar.get('d'), (Integer) ar.get('n'));
+        }
+        Map<String, List<Question__c>> byDomain = new Map<String, List<Question__c>>();
+        List<Question__c> others = new List<Question__c>();
+        for (Question__c c : [
+            SELECT Id, Domain__c FROM Question__c
+            WHERE Study_Session__c = null AND Status__c = 'Ready' AND Cert__r.Cert_Code__c IN :codes
+            LIMIT 200
+        ]) {
+            if (c.Domain__c != null && quotas.containsKey(c.Domain__c)) {
+                if (!byDomain.containsKey(c.Domain__c)) byDomain.put(c.Domain__c, new List<Question__c>());
+                byDomain.get(c.Domain__c).add(c);
+            } else {
+                others.add(c);
+            }
+        }
+        // order domains by remaining deficit (quota - served), largest first
+        Map<String, String> orderMap = new Map<String, String>();
+        for (String d : byDomain.keySet()) {
+            Integer deficit = quotas.get(d) - (served.containsKey(d) ? served.get(d) : 0);
+            orderMap.put(String.valueOf(1000 - deficit).leftPad(5, '0') + '|' + d, d);
+        }
+        List<String> keys = new List<String>(orderMap.keySet());
+        keys.sort();
+        List<Question__c> candidates = new List<Question__c>();
+        for (String k : keys) {
+            List<Question__c> domainGroup = byDomain.get(orderMap.get(k));
+            shuffleRecords(domainGroup);
+            candidates.addAll(domainGroup);
+        }
+        shuffleRecords(others);
+        candidates.addAll(others);
+        return lockAndClaim(s.Id, candidates);
     }
 
     private static void shuffleRecords(List<Question__c> items) {

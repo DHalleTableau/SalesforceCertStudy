@@ -48,12 +48,20 @@ If the CLI session expired, log in again: `sf org login web --alias certstudy --
 - No agent turns, so the only credit use is background generation.
 - Users need the **Cert Study User** perm set and must be users in this org. Background generation runs as whoever triggered it, so learners also need Einstein generative AI access.
 
-**Test mode (designed, not built yet):**
+**Test mode (built Nov 2, deploy and test pending):**
 - One cert; the real exam's question count, drawn by domain weight.
 - No feedback until the end.
 - At the end: PASS/FAIL against the real passing score, per-domain breakdown, and review of misses.
 - Ending early: unanswered questions count as wrong for the official score. A secondary score on the answered questions comes with per-section "likely would/wouldn't have passed" notes and focus recommendations.
 - Timer: the learner chooses a strict timer (auto-ends) or open time (elapsed shown). Pause hides the current question until they resume.
+- How it's built:
+  - New `Study_Session__c` fields: `Mode__c`, `Question_Target__c`, `Timer_Mode__c`, `Time_Limit_Min__c`, `Elapsed_Seconds__c`, `Resumed_At__c`, `Paused__c`, `Completed_At__c`.
+  - The clock runs only while a question is on screen, so pauses and generation waits don't count.
+  - Questions are claimed by domain quota (largest-remainder rounding of the weights).
+  - While a test is active, the cert's pool target rises to 10.
+  - Tests get 7 days of idle time before the scheduler abandons them.
+  - The chat agent refuses to serve an active test and points to the app.
+  - If exam details aren't derived yet: 60 questions / 105 min / 65% pass mark, flagged "estimated".
 
 **Handy one-line scripts** (in `scripts/`; run with `sf apex run --file scripts/<name>.apex --target-org certstudy`):
 - `modeltest.apex`: model reachable?

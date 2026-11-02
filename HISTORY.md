@@ -611,3 +611,22 @@ fallback for "any employee, no manual provisioning."
   - no feedback until the end; then PASS/FAIL, a per-domain breakdown and a review of misses;
   - ending early is a hybrid: unanswered questions count as wrong officially, plus a score on the answered questions with per-section "likely would/wouldn't have passed" notes and recommendations;
   - the user picks a strict timer or open time, and pause hides the current question.
+
+## Nov 2, 2026 (late): identity, overview repair, progress history, hosting direction
+
+- **Identity switched from email to Salesforce User Id.** Emails aren't unique in Salesforce: every agent
+  user is `noreply@salesforce.com`. A test proves two users with the same email, on the same cert at the same
+  time, get separate sessions and different question rows; the row lock on claim prevents double-serving.
+  Sessions created before the switch are keyed by email and don't appear in history.
+- **Platform Administrator had 28 equal "sections".** Its study material contains no section weights, only the
+  68% pass mark, so the model listed topics. The fixed prompt groups sections into 10 or fewer and leaves weights
+  blank when they aren't stated, and anything over 12 is rejected. Overview derivation now reads primary
+  sources from the start, not a random window. The real fix is to paste the official outline (with
+  percentages) into the cert's material.
+- **The progress-history test hit "Too many SOQL queries: 101".** That's test-only: the whole multi-session
+  scenario ran in one transaction. Wrapping the assertions in `Test.startTest()` gives them fresh limits.
+- **Hosting:** Experience Cloud on this org, before Slack. Salesforce's internal Slackbot: employee login to
+  Experience Cloud sites is possible ("Allow employees to log in directly..."), and an internal-only tool with
+  no customer data is the right shape. A persisting SDO as host isn't confirmed as sanctioned: ask in
+  #q-branch-sdo and treat it as a pilot. The app's data is in custom objects, not Data 360, so a backup and
+  rebuild script is needed.

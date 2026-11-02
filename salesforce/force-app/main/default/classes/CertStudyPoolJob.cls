@@ -59,7 +59,7 @@ public without sharing class CertStudyPoolJob implements Queueable, Database.All
             if (c.Grounding_Chars__c == null || c.Grounding_Chars__c == 0) continue;
             if (c.Top_Up_Started_At__c != null && c.Top_Up_Started_At__c > staleBefore) continue;
             Integer ready = readyByCert.containsKey(c.Id) ? readyByCert.get(c.Id) : 0;
-            if (ready >= CertStudyGenerator.POOL_SIZE) continue;
+            if (ready >= CertStudyService.poolTarget(c.Id)) continue;
             candidates.add(c.Id);
         }
         if (candidates.isEmpty()) return;
@@ -74,7 +74,7 @@ public without sharing class CertStudyPoolJob implements Queueable, Database.All
             if (c.Grounding_Chars__c == null || c.Grounding_Chars__c == 0) continue;
             if (c.Top_Up_Started_At__c != null && c.Top_Up_Started_At__c > staleBefore) continue;
             Integer ready = readyByCert.containsKey(c.Id) ? readyByCert.get(c.Id) : 0;
-            if (ready >= CertStudyGenerator.POOL_SIZE) continue;
+            if (ready >= CertStudyService.poolTarget(c.Id)) continue;
             if (Limits.getQueueableJobs() + toStart.size() >= Limits.getLimitQueueableJobs()) break;
             c.Top_Up_Started_At__c = DateTime.now();
             toStart.add(c);
@@ -159,7 +159,9 @@ public without sharing class CertStudyPoolJob implements Queueable, Database.All
 
         // First use: derive duration / question count / passing score / domains, once.
         if (cert.Overview_Derived_At__c == null) {
-            String raw = CertStudyLlm.get().generate(CertStudyGenerator.buildOverviewPrompt(cert.Name, grounding));
+            String raw = CertStudyLlm.get().generate(CertStudyGenerator.buildOverviewPrompt(
+                cert.Name, CertStudyGenerator.overviewGrounding(cert.Id, CertStudyGenerator.MAX_GROUNDING_CHARS)
+            ));
             if (!CertStudyGenerator.applyOverview(raw, cert)) {
                 cert.Last_Generation_Error__c = 'Could not parse cert overview; generating without domain rotation.';
             }
@@ -171,7 +173,8 @@ public without sharing class CertStudyPoolJob implements Queueable, Database.All
             SELECT COUNT() FROM Question__c
             WHERE Cert__c = :cert.Id AND Status__c = 'Ready' AND Study_Session__c = null
         ];
-        if (ready >= CertStudyGenerator.POOL_SIZE) return false;
+        Integer target = CertStudyService.poolTarget(cert.Id);
+        if (ready >= target) return false;
 
         Integer total = [SELECT COUNT() FROM Question__c WHERE Cert__c = :cert.Id];
         Integer difficulty = CertStudyGenerator.nextDifficulty(total);
@@ -232,6 +235,6 @@ public without sharing class CertStudyPoolJob implements Queueable, Database.All
         attempt = 0;
         fallback = null;
         fallbackRatio = null;
-        return ready + 1 < CertStudyGenerator.POOL_SIZE;
+        return ready + 1 < target;
     }
 }

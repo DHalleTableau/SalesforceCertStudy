@@ -57,7 +57,15 @@ edits files and checks Apex syntax in the sandbox with `prettier-plugin-apex@1.1
      - Confirm the feedback stays until Next.
      - Check the Summary.
      - If the app is missing, re-check the CertStudy_Admin perm set or open the Cert Study tab.
-     Then build **Test mode** (spec in `salesforce/README.md`).
+     Done: the app smoke test passed. Test mode passed too; the user tested a full early-end run.
+  0b. Nov 2 (later):
+      - Quick fixes: exam sections come from top-level weighted sections only; more than 12 sections is rejected; with no weights in the material, sections are grouped into 10 or fewer (equal weights).
+      - `CertStudyOverviewJob.rederiveSuspect()` (`scripts/rederive_overviews.apex`) fixed Platform Administrator (28 → 10 sections). Its material has no section weights; pasting the official outline would give real weights.
+      - Recommendations capped at 5, with "not reached" combined into one line; weights rounded.
+      - **Identity = Salesforce User Id**, not email (emails aren't unique). `Study_Session__c.User__c` lookup added. A test proves two same-email users stay separate.
+      - **Progress history** built and deployed: the "My progress" button shows totals, all-time weakest areas and a session/test list with re-openable details (`getHistory` / `getSessionDetail`). 27/27 tests pass. Not yet tried in the browser.
+      - The LWC now targets Experience Cloud pages too.
+  0c. NEXT FOCUS: **host via Experience Cloud on this org** (before Slack). See "Hosting" below.
   1. In the builder: confirm `practice_session` has RULE 1. Send Optimizer prompt #3 if needed. Always save from the Agent Definition tab.
   2. Retest in Live Test.
   3. Identity check: is `User_Key__c` the learner's email or the agent user's? If it's the agent user, pass the end-user identity into `userKey`.
@@ -69,6 +77,42 @@ edits files and checks Apex syntax in the sandbox with `prettier-plugin-apex@1.1
   - Data 360 search index for grounding.
   - Delete the Heroku app/DB.
   - Commit and push the repo (the user commits from their Terminal).
+
+## Hosting plan: Experience Cloud (next)
+
+The user prefers Experience Cloud on this org over Slack, since Slack permissions are uncertain. What Salesforce's internal Slackbot said: employees can log in to Experience Cloud sites (check the "Allow employees to log in directly to an Experience Cloud site" setting), and an internal-only, no-customer-data tool is the right shape. A persisting SDO as a host is NOT confirmed as sanctioned, so ask in #q-branch-sdo before promoting it widely, and call it a pilot.
+
+**Correction:** the app's data lives in custom objects in this org, NOT Data 360. Back it up: a CSV export plus a rebuild script, so an org lapse is recoverable.
+
+**Licenses available in the org (Nov 2):**
+- Salesforce: 506 free.
+- External Apps Login: 1300.
+- Customer Community Plus Login: 405 (90 non-login).
+- Customer Community Login: 30.
+- External Identity: 2100. Login only, too limited to run the app.
+
+**Recommended pilot design:**
+- An LWR site with the `certStudy` component; the LWC already has the `lightningCommunity__Page/Default` targets.
+- Users on **External Apps Login** (or CC Plus Login).
+- **Self-registration restricted to @salesforce.com emails**, with email verification: an Apex self-reg handler that rejects other domains, and an Account to hold the users' Contacts.
+- The admin stays internal.
+- Identity already uses the User Id, so community users are separate.
+
+**FIRST, build this (next session):** decouple question generation from the learner. Today the pool job runs as whoever triggered it, and site users almost certainly can't call the Models API. Plan:
+1. The learner's request publishes a `Cert_Study_TopUp__e` platform event, instead of calling `System.enqueueJob` directly.
+2. A trigger on that event, with its running user set via PlatformEventSubscriberConfig to an internal integration/admin user, calls `CertStudyPoolJob.requestTopUp`.
+3. Keep the direct path as a fallback in tests.
+
+This also removes the "in-org testers need Einstein access" requirement.
+
+Then confirm in testing that site users can run the `CertStudyController` Apex (via a perm set) and that `without sharing` service access works for them.
+
+**Steps to work out:**
+- enable Digital Experiences;
+- create an LWR site and put the `certStudy` component on its home page;
+- decide on the login model: employees as internal users vs external (community) users with self-registration or SSO;
+- a site/member permission set: CertStudy_User plus Einstein generative AI access for generation;
+- the employee-direct-login setting.
 
 ## Local Environment Notes (retired Heroku build — read before touching git or pip)
 

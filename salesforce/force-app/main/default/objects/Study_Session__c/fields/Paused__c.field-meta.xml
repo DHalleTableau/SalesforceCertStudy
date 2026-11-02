@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>Paused__c</fullName>
+    <description>Test mode: learner paused; the current question is hidden until they resume.</description>
+    <label>Paused</label>
+    <defaultValue>false</defaultValue>
+    <type>Checkbox</type>
+</CustomField>

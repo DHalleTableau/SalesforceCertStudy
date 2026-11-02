@@ -6,6 +6,7 @@
  */
 public without sharing class CertStudyScheduler implements Schedulable {
     public static final Integer IDLE_HOURS = 24;
+    public static final Integer TEST_IDLE_DAYS = 7;
 
     public void execute(SchedulableContext ctx) {
         run();
@@ -13,9 +14,15 @@ public without sharing class CertStudyScheduler implements Schedulable {
 
     public static void run() {
         DateTime cutoff = DateTime.now().addHours(-IDLE_HOURS);
+        // Tests can be paused and resumed later, so they get a week before being abandoned.
+        DateTime testCutoff = DateTime.now().addDays(-TEST_IDLE_DAYS);
         CertStudyService.endSessions([
             SELECT Id FROM Study_Session__c
-            WHERE Status__c = 'Active' AND (Last_Activity__c < :cutoff OR Last_Activity__c = null)
+            WHERE Status__c = 'Active' AND (
+                Last_Activity__c = null
+                OR (Mode__c != 'Test' AND Last_Activity__c < :cutoff)
+                OR (Mode__c = 'Test' AND Last_Activity__c < :testCutoff)
+            )
         ]);
         CertStudyPoolJob.requestTopUp(CertStudyService.activeCertCodes());
     }

@@ -9,6 +9,7 @@
  */
 public without sharing class CertStudyGenerator {
     public static final Integer POOL_SIZE = 5;
+    public static final Integer MAX_DOMAINS = 12;
     public static final Integer MAX_GROUNDING_CHARS = 60000;
     public static final Integer AVOID_STEMS_LIMIT = 40;
     public static final Integer MIN_FEEDBACK_LENGTH = 100;
@@ -135,6 +136,24 @@ public without sharing class CertStudyGenerator {
      * group shuffled; a random contiguous window if over maxChars so calls
      * do not always see the same prefix.
      */
+    /**
+     * Overview derivation needs the exam outline, which sits near the top of the
+     * primary exam guide -- so: primary sources first, unshuffled, from the start
+     * (no random window), then additional sources, truncated at maxChars.
+     */
+    public static String overviewGrounding(Id certId, Integer maxChars) {
+        List<String> sections = new List<String>();
+        for (Cert_Resource__c r : [
+            SELECT Role__c, Content__c FROM Cert_Resource__c
+            WHERE Cert__c = :certId AND Content_Length__c > 0
+            ORDER BY Role__c DESC, CreatedDate ASC
+        ]) {
+            sections.add(r.Content__c.trim());
+        }
+        String full = String.join(sections, '\n\n');
+        return full.length() <= maxChars ? full : full.substring(0, maxChars);
+    }
+
     public static String assembleGrounding(Id certId, Integer maxChars) {
         List<Cert_Resource__c> primary = new List<Cert_Resource__c>();
         List<Cert_Resource__c> additional = new List<Cert_Resource__c>();
@@ -248,6 +267,7 @@ public without sharing class CertStudyGenerator {
         lines.add('Respond with ONLY a single JSON object, no markdown fences, with exactly these keys:');
         lines.add('{"duration_min": integer, "num_questions": integer, "passing_score": integer percent, "domain_names": [strings], "domain_weights": [numbers, same order as domain_names, summing to ~100]}');
         lines.add('Use the numbers actually stated in the text; only estimate if a field genuinely is not stated.');
+        lines.add('domain_names must be the exam\'s TOP-LEVEL weighted sections only -- the outline that carries the official percentage weights (usually 3 to 10 sections, e.g. "Configuration and Setup: 20%"). Do NOT list individual objectives, sub-topics, or bullet points as separate domains. Use the official weights exactly as stated. If the text does NOT state section weights, group the objectives into at most 10 top-level sections and return an EMPTY domain_weights list -- never invent percentages.');
         return String.join(lines, '\n');
     }
 
@@ -316,6 +336,8 @@ public without sharing class CertStudyGenerator {
             cert.Passing_Score__c = toDecimal(m.get('passing_score'));
             List<String> names = asStringList(m.get('domain_names'));
             List<String> weights = asStringList(m.get('domain_weights'));
+            // More than this almost always means sub-objectives were listed instead of weighted sections.
+            if (names.size() > MAX_DOMAINS) return false;
             List<Map<String, Object>> doms = new List<Map<String, Object>>();
             for (Integer i = 0; i < names.size(); i++) {
                 Map<String, Object> d = new Map<String, Object>{ 'name' => names[i] };

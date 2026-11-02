@@ -120,3 +120,11 @@
     border-radius: 0.5rem;
     padding: 0.5rem 0.75rem;
 }
+
+.timer_low {
+    color: #ba0517;
+}
+
+.history-row {
+    border-bottom: 1px solid #e5e5e5;
+}
