@@ -10,5 +10,7 @@ venv/
 .claude/
 *.pem
 salesforce/export/
+salesforce/backups/
+salesforce/restore/
 salesforce/.sf/
 salesforce/.sfdx/

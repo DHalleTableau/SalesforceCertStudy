@@ -20,6 +20,17 @@ public without sharing class CertStudyPoolJob implements Queueable, Database.All
      */
     public static final Integer MAX_CHAIN_DEPTH = 5;
     public static final String RESTART_JOB_PREFIX = 'Cert Study restart ';
+    /**
+     * Top-up chains allowed to run at once, org-wide. A burst of parallel model
+     * calls (e.g. a learner picking a dozen cold certs) made the Models API fail
+     * for every cert at once; finished chains start the next waiting cert instead.
+     */
+    @TestVisible
+    private static Integer maxConcurrent = 3;
+    /** A cert that gave up after repeated failures is not retried for this long. */
+    public static final Integer FAILURE_COOLDOWN_MIN = 10;
+    /** A failed model call is retried by a delayed job, not immediately. */
+    public static final Integer RETRY_DELAY_MIN = 1;
 
     @TestVisible
     private static Boolean forceAtMaxDepth = false;
@@ -28,6 +39,7 @@ public without sharing class CertStudyPoolJob implements Queueable, Database.All
     private Integer attempt = 0;
     private CertStudyGenerator.GeneratedQuestion fallback;
     private Decimal fallbackRatio;
+    private Boolean modelFailed = false; // this run's model call failed (retry later, don't hammer)
 
     public CertStudyPoolJob(Id certId) {
         this.certId = certId;
@@ -61,6 +73,12 @@ public without sharing class CertStudyPoolJob implements Queueable, Database.All
     public static void requestTopUp(Set<String> certCodes) {
         if (certCodes == null || certCodes.isEmpty()) return;
         DateTime staleBefore = DateTime.now().addMinutes(-LOCK_STALE_MINUTES);
+        DateTime cooldownBefore = DateTime.now().addMinutes(-FAILURE_COOLDOWN_MIN);
+
+        // Concurrency cap: only start chains while fewer than maxConcurrent are running.
+        Integer running = [SELECT COUNT() FROM Cert__c WHERE Top_Up_Started_At__c > :staleBefore];
+        Integer slots = maxConcurrent - running;
+        if (slots <= 0) return;
 
         Map<Id, Integer> readyByCert = new Map<Id, Integer>();
         for (AggregateResult ar : [
@@ -76,12 +94,13 @@ public without sharing class CertStudyPoolJob implements Queueable, Database.All
         // row lock held by a running generation job for the same cert.
         Set<Id> candidates = new Set<Id>();
         for (Cert__c c : [
-            SELECT Id, Top_Up_Started_At__c, Grounding_Chars__c
+            SELECT Id, Top_Up_Started_At__c, Grounding_Chars__c, Last_Failure_At__c
             FROM Cert__c
             WHERE Cert_Code__c IN :certCodes
         ]) {
             if (c.Grounding_Chars__c == null || c.Grounding_Chars__c == 0) continue;
             if (c.Top_Up_Started_At__c != null && c.Top_Up_Started_At__c > staleBefore) continue;
+            if (c.Last_Failure_At__c != null && c.Last_Failure_At__c > cooldownBefore) continue;
             Integer ready = readyByCert.containsKey(c.Id) ? readyByCert.get(c.Id) : 0;
             if (ready >= CertStudyService.poolTarget(c.Id)) continue;
             candidates.add(c.Id);
@@ -99,6 +118,7 @@ public without sharing class CertStudyPoolJob implements Queueable, Database.All
             if (c.Top_Up_Started_At__c != null && c.Top_Up_Started_At__c > staleBefore) continue;
             Integer ready = readyByCert.containsKey(c.Id) ? readyByCert.get(c.Id) : 0;
             if (ready >= CertStudyService.poolTarget(c.Id)) continue;
+            if (toStart.size() >= slots) break;
             if (Limits.getQueueableJobs() + toStart.size() >= Limits.getLimitQueueableJobs()) break;
             c.Top_Up_Started_At__c = DateTime.now();
             toStart.add(c);
@@ -124,7 +144,16 @@ public without sharing class CertStudyPoolJob implements Queueable, Database.All
             chain = runOnce(cert);
         } catch (Exception e) {
             cert.Last_Generation_Error__c = (DateTime.now().format() + ' ' + e.getTypeName() + ': ' + e.getMessage()).abbreviate(32000);
-            chain = false;
+            // Typically a Models API callout failure (overview derivation): retry later, a few times.
+            attempt++;
+            if (attempt < MAX_ATTEMPTS) {
+                chain = true;
+                modelFailed = true;
+            } else {
+                attempt = 0;
+                chain = false;
+                cert.Last_Failure_At__c = DateTime.now();
+            }
         }
         Boolean restartLater = false;
         if (chain && atMaxDepth()) {
@@ -140,7 +169,14 @@ public without sharing class CertStudyPoolJob implements Queueable, Database.All
             next.fallback = fallback;
             next.fallbackRatio = fallbackRatio;
             try {
-                System.enqueueJob(next);
+                if (modelFailed) {
+                    // Back off: a failed call retries after a delay instead of burning every attempt at once.
+                    AsyncOptions retry = new AsyncOptions();
+                    retry.MinimumQueueableDelayInMinutes = RETRY_DELAY_MIN;
+                    System.enqueueJob(next, retry);
+                } else {
+                    System.enqueueJob(next);
+                }
             } catch (AsyncException e) {
                 // Depth limit we could not detect up front: release the lock so the restart can claim it.
                 update new Cert__c(Id = certId, Top_Up_Started_At__c = null);
@@ -148,6 +184,16 @@ public without sharing class CertStudyPoolJob implements Queueable, Database.All
             }
         }
         if (restartLater) scheduleRestart();
+
+        // A chain that ended normally frees a slot: start the next waiting cert (the
+        // failure cooldown keeps a cert that just gave up from being retried right away).
+        if (!chain && !restartLater && !Test.isRunningTest()) {
+            try {
+                requestTopUp(CertStudyService.activeCertCodes());
+            } catch (Exception e) {
+                // Best effort; the hourly scheduler picks up anything missed.
+            }
+        }
     }
 
     private static Boolean atMaxDepth() {
@@ -173,6 +219,7 @@ public without sharing class CertStudyPoolJob implements Queueable, Database.All
     /** One unit of work. Returns true if another job should follow. All callouts happen before any DML. */
     @TestVisible
     private Boolean runOnce(Cert__c cert) {
+        modelFailed = false;
         if (!CertStudyService.isCertNeeded(cert.Id)) return false;
 
         String grounding = CertStudyGenerator.assembleGrounding(cert.Id, CertStudyGenerator.MAX_GROUNDING_CHARS);
@@ -227,6 +274,7 @@ public without sharing class CertStudyPoolJob implements Queueable, Database.All
             reason = CertStudyGenerator.validityReason(candidate);
         } catch (Exception e) {
             reason = 'model call failed: ' + e.getMessage();
+            modelFailed = true;
         }
 
         CertStudyGenerator.GeneratedQuestion toInsert = null;
@@ -246,7 +294,8 @@ public without sharing class CertStudyPoolJob implements Queueable, Database.All
             if (attempt >= MAX_ATTEMPTS) {
                 if (fallback == null) {
                     attempt = 0;
-                    return false; // give up this cycle; next claim or the scheduler retries
+                    cert.Last_Failure_At__c = DateTime.now(); // cooldown before anything retries this cert
+                    return false; // give up this cycle; the scheduler or a later claim retries
                 }
                 toInsert = fallback;
             }
@@ -255,7 +304,10 @@ public without sharing class CertStudyPoolJob implements Queueable, Database.All
         if (toInsert == null) return true; // retry the same slot
 
         insert CertStudyGenerator.toRecord(toInsert, cert.Id);
-        if (reason == null) cert.Last_Generation_Error__c = null;
+        if (reason == null) {
+            cert.Last_Generation_Error__c = null;
+            cert.Last_Failure_At__c = null;
+        }
         attempt = 0;
         fallback = null;
         fallbackRatio = null;

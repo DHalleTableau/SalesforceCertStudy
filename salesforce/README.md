@@ -182,3 +182,21 @@ Question generation is requested through the `Cert_Study_TopUp__e` platform even
 Full status and next steps: `PLAN.md` > "Hosting status".
 Run tests with only our classes (RunLocalTests also runs failing SDO sample tests):
 `sf apex run test --target-org certstudy --class-names CertStudyTest --class-names CertStudyControllerTest --class-names CertStudySelfRegHandlerTest --class-names CertStudyLoginDiscoveryHandlerTest --wait 10`
+
+## Backup and restore
+
+The data lives in custom objects in this org (not Data 360), so back it up in case the org lapses.
+
+```
+cd ~/Documents/SalesforceCertStudy/salesforce
+bash scripts/backup_org.sh                 # writes backups/YYYY-MM-DD/*.csv (gitignored)
+```
+
+Content (certs, prerequisites, resources, all questions) is restorable; learner history (sessions, answers) is an archive only.
+To rebuild in a new, empty org: deploy `force-app/`, assign `CertStudy_Admin` to the loading user, then
+
+```
+python3 scripts/restore_from_backup.py backups/YYYY-MM-DD   # writes restore/..., prints the sf commands to run in order
+```
+
+Parents are matched by `Cert_Code__c`, not record Id. Child loads are inserts, so use an empty org (or the loads will duplicate). Keep the backups somewhere outside this laptop too (they contain the full study corpus, so do not commit them).

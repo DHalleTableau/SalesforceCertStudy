@@ -359,6 +359,49 @@ private class CertStudyTest {
     }
 
     @IsTest
+    static void topUpWaitsWhenConcurrencyCapReached() {
+        markOverviewDone('AI-201');
+        activeSession('AI-201');
+        CertStudyPoolJob.maxConcurrent = 1;
+        update new Cert__c(Id = certId('FOUND-101'), Top_Up_Started_At__c = DateTime.now());
+        CertStudyPoolJob.requestTopUp(new Set<String>{ 'AI-201' });
+        Assert.isNull(cert('AI-201').Top_Up_Started_At__c, 'cap reached, so this cert waits for a free slot');
+    }
+
+    @IsTest
+    static void topUpStartsWhenBelowConcurrencyCap() {
+        markOverviewDone('AI-201');
+        activeSession('AI-201');
+        CertStudyPoolJob.maxConcurrent = 1;
+        CertStudyPoolJob.requestTopUp(new Set<String>{ 'AI-201' });
+        Assert.isNotNull(cert('AI-201').Top_Up_Started_At__c, 'a slot was free');
+    }
+
+    @IsTest
+    static void topUpSkipsCertInFailureCooldown() {
+        markOverviewDone('AI-201');
+        activeSession('AI-201');
+        update new Cert__c(Id = certId('AI-201'), Last_Failure_At__c = DateTime.now());
+        CertStudyPoolJob.requestTopUp(new Set<String>{ 'AI-201' });
+        Assert.isNull(cert('AI-201').Top_Up_Started_At__c, 'recently gave up, so no immediate retry');
+    }
+
+    @IsTest
+    static void repeatedModelFailuresStartCooldown() {
+        FakeLlm fake = new FakeLlm();
+        fake.fail = true;
+        CertStudyLlm.instance = fake;
+        markOverviewDone('AI-201');
+        activeSession('AI-201');
+        CertStudyPoolJob job = new CertStudyPoolJob(certId('AI-201'));
+        Cert__c c = cert('AI-201');
+        for (Integer i = 0; i < CertStudyPoolJob.MAX_ATTEMPTS; i++) {
+            job.runOnce(c);
+        }
+        Assert.isNotNull(c.Last_Failure_At__c, 'giving up records the failure time');
+    }
+
+    @IsTest
     static void lengthBiasedCandidatesFallBackAfterMaxAttempts() {
         FakeLlm fake = new FakeLlm();
         fake.biased = true;
