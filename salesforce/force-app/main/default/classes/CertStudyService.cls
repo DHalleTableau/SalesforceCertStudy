@@ -49,6 +49,26 @@ public without sharing class CertStudyService {
 
     // ---------------------------------------------------------------- certs
 
+    /** Certs with study material loaded (or aggregates), for the Lightning/site cert picker. */
+    public static List<Cert__c> usableCerts() {
+        List<Cert__c> out = new List<Cert__c>();
+        for (Cert__c c : [
+            SELECT Name, Cert_Code__c, Is_Aggregate__c, Grounding_Chars__c
+            FROM Cert__c ORDER BY Name LIMIT 500
+        ]) {
+            if (c.Is_Aggregate__c || (c.Grounding_Chars__c != null && c.Grounding_Chars__c > 0)) out.add(c);
+        }
+        return out;
+    }
+
+    /** [answered, correct] for a session. */
+    public static Integer[] answerCounts(Id sessionId) {
+        return new Integer[] {
+            [SELECT COUNT() FROM Answer__c WHERE Study_Session__c = :sessionId],
+            [SELECT COUNT() FROM Answer__c WHERE Study_Session__c = :sessionId AND Is_Correct__c = true]
+        };
+    }
+
     public static String findCerts(String searchTerm) {
         List<Cert__c> certs;
         if (String.isBlank(searchTerm)) {

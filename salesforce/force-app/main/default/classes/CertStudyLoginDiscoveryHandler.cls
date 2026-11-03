@@ -12,7 +12,8 @@ global without sharing class CertStudyLoginDiscoveryHandler implements Auth.Logi
     global PageReference login(String identifier, String startUrl, Map<String, String> requestAttributes) {
         Id userId = findUserId(identifier);
         if (userId == null) {
-            throw new Auth.LoginDiscoveryException(GENERIC_ERROR);
+            // DiscoveryCustomErrorException's message is shown on the login page.
+            throw new Auth.DiscoveryCustomErrorException(GENERIC_ERROR);
         }
         return Site.passwordlessLogin(userId, new List<Auth.VerificationMethod>{ Auth.VerificationMethod.EMAIL }, startUrl);
     }

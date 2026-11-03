@@ -183,11 +183,8 @@ public with sharing class CertStudyController {
     @AuraEnabled
     public static List<CertOption> listCerts() {
         List<CertOption> out = new List<CertOption>();
-        for (Cert__c c : [
-            SELECT Name, Cert_Code__c, Is_Aggregate__c, Grounding_Chars__c
-            FROM Cert__c ORDER BY Name LIMIT 500
-        ]) {
-            if (!(c.Is_Aggregate__c || (c.Grounding_Chars__c != null && c.Grounding_Chars__c > 0))) continue;
+        // Queried in the without-sharing service: Cert__c is Private for external users.
+        for (Cert__c c : CertStudyService.usableCerts()) {
             CertOption o = new CertOption();
             o.code = c.Cert_Code__c;
             o.name = c.Name;
@@ -586,8 +583,10 @@ public with sharing class CertStudyController {
 
     private static void fillSession(SessionView v, Study_Session__c s, Boolean claimIfNeeded) {
         v.hasActiveSession = true;
-        v.answered = [SELECT COUNT() FROM Answer__c WHERE Study_Session__c = :s.Id];
-        v.correct = [SELECT COUNT() FROM Answer__c WHERE Study_Session__c = :s.Id AND Is_Correct__c = true];
+        // Counted in the without-sharing service: external users can't see Answer__c rows directly.
+        Integer[] counts = CertStudyService.answerCounts(s.Id);
+        v.answered = counts[0];
+        v.correct = counts[1];
         if (CertStudyService.isTest(s)) {
             fillTest(v, s);
             return;

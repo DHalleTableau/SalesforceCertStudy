@@ -17,7 +17,7 @@ private class CertStudyLoginDiscoveryHandlerTest {
         try {
             new CertStudyLoginDiscoveryHandler().login('nobody@salesforce.com', null, new Map<String, String>());
             Assert.fail('expected error');
-        } catch (Auth.LoginDiscoveryException e) {
+        } catch (Auth.DiscoveryCustomErrorException e) {
             Assert.areEqual(CertStudyLoginDiscoveryHandler.GENERIC_ERROR, e.getMessage());
         }
     }

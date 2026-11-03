@@ -62,7 +62,7 @@
                 </template>
                 <div class="cert-list slds-box slds-box_x-small">
                     <template for:each={filteredCerts} for:item="c">
-                        <div key={c.code} class="slds-p-vertical_xx-small">
+                        <div key={c.code} class="cert-row">
                             <lightning-input type="checkbox" label={c.label} data-code={c.code}
                                 checked={c.checked} onchange={toggleCert}></lightning-input>
                         </div>

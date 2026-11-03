@@ -81,6 +81,18 @@
     overflow-y: auto;
 }
 
+/* Explicit spacing: LWR sites don't apply the same SLDS defaults as the Lightning app. */
+.cert-row {
+    padding: 0.125rem 0;
+    margin: 0;
+    line-height: 1.25;
+}
+
+.cert-row lightning-input {
+    display: block;
+    margin: 0;
+}
+
 .session-bar {
     border-bottom: 1px solid #e5e5e5;
     padding-bottom: 0.5rem;
