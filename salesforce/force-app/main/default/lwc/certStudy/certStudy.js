@@ -12,12 +12,28 @@ import resumeTest from '@salesforce/apex/CertStudyController.resumeTest';
 import finishTest from '@salesforce/apex/CertStudyController.finishTest';
 import getHistory from '@salesforce/apex/CertStudyController.getHistory';
 import getSessionDetail from '@salesforce/apex/CertStudyController.getSessionDetail';
+import getEarnedCerts from '@salesforce/apex/CertStudyController.getEarnedCerts';
+import setCertEarned from '@salesforce/apex/CertStudyController.setCertEarned';
 import LightningConfirm from 'lightning/confirm';
+import { recommend } from './certRecommendations';
+import { ALL, certType, certArea, typeOptions as buildTypeOptions, areaOptions as buildAreaOptions } from './certCategories';
 
 const POLL_MS = 4000;
 const MAX_POLLS = 45; // ~3 minutes
 
+// Shown in the banner/footer. Bump APP_VERSION and APP_RELEASED on each release.
+const APP_VERSION = 'v0.10.0';
+const APP_RELEASED = 'Nov 4, 2026';
+const OWNER_NAME = 'Daniel Halle';
+const OWNER_EMAIL = 'daniel.halle@salesforce.com';
+
 export default class CertStudy extends LightningElement {
+    appVersion = APP_VERSION;
+    releasedOn = APP_RELEASED;
+    ownerName = OWNER_NAME;
+    ownerEmail = OWNER_EMAIL;
+    ownerMailto = 'mailto:' + OWNER_EMAIL + '?subject=Cert%20Study%20feedback%20(' + APP_VERSION + ')';
+
     view = 'loading'; // loading | select | prereq | question | feedback | waiting | summary | paused | testResult
     mode = 'practice'; // practice | test (selection screen)
     timerChoice = 'open'; // open | strict
@@ -88,7 +104,9 @@ export default class CertStudy extends LightningElement {
     get isPaused() { return this.view === 'paused'; }
     get isTestResult() { return this.view === 'testResult'; }
     get isHistory() { return this.view === 'history'; }
-    get showHistoryButton() { return ['select', 'summary', 'testResult'].includes(this.view) && !this.busy; }
+    get isRecs() { return this.view === 'recs'; }
+    get showHistoryButton() { return ['select', 'summary', 'testResult', 'recs'].includes(this.view) && !this.busy; }
+    get showRecsButton() { return ['select', 'summary', 'testResult', 'history'].includes(this.view) && !this.busy; }
     get inSession() { return ['question', 'feedback', 'waiting', 'paused'].includes(this.view); }
     get inTest() { return this.inSession && this.session && this.session.isTest; }
     get inPractice() { return this.inSession && !(this.session && this.session.isTest); }
@@ -100,6 +118,11 @@ export default class CertStudy extends LightningElement {
         this.fromHistory = false;
         if (!this.allCerts.length) {
             this.allCerts = await listCerts();
+        }
+        try {
+            this.earnedCodes = await getEarnedCerts();
+        } catch (e) {
+            this.earnedCodes = []; // the picker still works without it
         }
         this.selectedCodes = [];
         this.prereqAnswers = {};
@@ -146,16 +169,85 @@ export default class CertStudy extends LightningElement {
         this.timerChoice = event.detail.value;
     }
 
+    hideRetiring = false;
+    typeFilter = ALL;
+    areaFilter = ALL;
+    typeFilterOptions = buildTypeOptions();
+    areaFilterOptions = buildAreaOptions();
+
+    handleHideRetiring(event) {
+        this.hideRetiring = event.target.checked;
+    }
+
+    // Certs the learner says they have earned. Hidden by default; the filter can be unticked.
+    earnedCodes = [];
+    hideEarned = true;
+
+    handleHideEarned(event) {
+        this.hideEarned = event.target.checked;
+    }
+
+    get hideEarnedLabel() {
+        const n = this.allCerts.filter((c) => this.earnedCodes.includes(c.code)).length;
+        return n > 0 ? `Hide certs I've earned (${n})` : "Hide certs I've earned";
+    }
+
+    async toggleEarned(event) {
+        const code = event.target.dataset.code;
+        const nowEarned = !this.earnedCodes.includes(code);
+        const before = this.earnedCodes;
+        // Optimistic update, rolled back if the save fails.
+        this.earnedCodes = nowEarned ? [...before, code] : before.filter((c) => c !== code);
+        if (nowEarned && this.hideEarned) {
+            this.selectedCodes = this.selectedCodes.filter((c) => c !== code);
+        }
+        try {
+            this.earnedCodes = await setCertEarned({ certCode: code, earned: nowEarned });
+        } catch (e) {
+            this.earnedCodes = before;
+            this.fail(e);
+        }
+    }
+
+    handleTypeFilter(event) {
+        this.typeFilter = event.detail.value;
+    }
+
+    handleAreaFilter(event) {
+        this.areaFilter = event.detail.value;
+    }
+
     get filteredCerts() {
         const f = this.filterText.toLowerCase();
         return this.allCerts
             .filter((c) => !(this.isTestMode && c.isAggregate))
+            .filter((c) => !(this.hideRetiring && (c.status === 'Retiring' || c.status === 'Retired')))
+            .filter((c) => !(this.hideEarned && this.earnedCodes.includes(c.code)))
+            .filter((c) => this.typeFilter === ALL || certType(c.name) === this.typeFilter)
+            .filter((c) => this.areaFilter === ALL || certArea(c.name) === this.areaFilter)
             .filter((c) => !f || c.name.toLowerCase().includes(f) || c.code.toLowerCase().includes(f))
-            .map((c) => ({
-                ...c,
-                checked: this.selectedCodes.includes(c.code),
-                label: c.isAggregate ? `${c.name} (earned via prerequisites)` : c.name
-            }));
+            .map((c) => {
+                const flagged = c.status === 'Retiring' || c.status === 'Retired';
+                let note = '';
+                if (flagged) {
+                    const when = c.retiresOn ? (c.status === 'Retired' ? ' (' : ' on ') + c.retiresOn + (c.status === 'Retired' ? ')' : '') : '';
+                    note = `${c.status === 'Retired' ? 'Retired' : 'Retiring'}${when}`;
+                    if (c.pathForward) note += `. ${c.pathForward}`;
+                }
+                const prereqNames = (c.prereqs || []).map((n) => n.replace(/^Salesforce (Certified|Accredited) /, ''));
+                return {
+                    ...c,
+                    checked: this.selectedCodes.includes(c.code),
+                    label: c.isAggregate ? `${c.name} (earned via prerequisites)` : c.name,
+                    isFlagged: flagged,
+                    statusNote: note,
+                    isEarned: this.earnedCodes.includes(c.code),
+                    earnedLabel: this.earnedCodes.includes(c.code) ? 'Earned (undo)' : 'Mark earned',
+                    earnedIcon: this.earnedCodes.includes(c.code) ? 'utility:check' : '',
+                    hasPrereqs: prereqNames.length > 0,
+                    prereqNote: `Requires: ${prereqNames.join(', ')}`
+                };
+            });
     }
 
     get selectedCerts() {
@@ -691,6 +783,63 @@ export default class CertStudy extends LightningElement {
 
     continuePractice() { this.next(); }
     newSession() { this.showSelect(); }
+
+    // ------------------------------------------------- suggested next certs
+
+    recs = [];
+
+    get hasRecs() { return this.recs.length > 0; }
+    get recsSubline() {
+        const n = this.earnedCodes.length;
+        return n
+            ? `Based on the ${n} certification${n === 1 ? '' : 's'} you marked as earned, plus a couple of ways to broaden your skills. Retiring exams are left out.`
+            : 'You have not marked any certifications as earned yet, so these are popular places to start. Use "Mark earned" in the list for suggestions tailored to you.';
+    }
+
+    buildRecs() {
+        this.recs = recommend(this.allCerts, this.earnedCodes).map((r, i) => ({
+            ...r,
+            key: 'r' + i,
+            isBroaden: r.kind === 'broaden'
+        }));
+    }
+
+    async showRecs() {
+        this.stopPolling();
+        this.error = undefined;
+        this.busy = true;
+        try {
+            if (!this.allCerts.length) this.allCerts = await listCerts();
+            try {
+                this.earnedCodes = await getEarnedCerts();
+            } catch (e) {
+                // fall back to what is already loaded
+            }
+            this.buildRecs();
+            this.view = 'recs';
+        } catch (e) {
+            this.fail(e);
+        } finally {
+            this.busy = false;
+        }
+    }
+
+    async practiceRec(event) {
+        const code = event.target.dataset.code;
+        this.mode = 'practice';
+        await this.showSelect();
+        this.selectedCodes = [code];
+    }
+
+    async recAlreadyHave(event) {
+        const code = event.target.dataset.code;
+        try {
+            this.earnedCodes = await setCertEarned({ certCode: code, earned: true });
+            this.buildRecs();
+        } catch (e) {
+            this.fail(e);
+        }
+    }
 
     // ------------------------------------------------------------ history
 

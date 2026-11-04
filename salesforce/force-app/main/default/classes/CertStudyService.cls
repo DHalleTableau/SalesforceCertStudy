@@ -15,6 +15,8 @@
  * Runs without sharing: the question pool is shared across learners.
  */
 public without sharing class CertStudyService {
+    public class ServiceException extends Exception {}
+
     public static final String ACTIVE = 'Active';
     public static final String ENDED = 'Ended';
     /** Agents sometimes re-call SubmitAnswer in one turn; identical answers this close together are ignored. */
@@ -53,10 +55,56 @@ public without sharing class CertStudyService {
     public static List<Cert__c> usableCerts() {
         List<Cert__c> out = new List<Cert__c>();
         for (Cert__c c : [
-            SELECT Name, Cert_Code__c, Is_Aggregate__c, Grounding_Chars__c
+            SELECT Name, Cert_Code__c, Is_Aggregate__c, Grounding_Chars__c,
+                Exam_Status__c, Retires_On__c, Path_Forward__c
             FROM Cert__c ORDER BY Name LIMIT 500
         ]) {
             if (c.Is_Aggregate__c || (c.Grounding_Chars__c != null && c.Grounding_Chars__c > 0)) out.add(c);
+        }
+        return out;
+    }
+
+    // --------------------------------------------- certifications a learner has earned
+
+    /** Cert codes this user has marked as earned (self-reported now; Trailhead sync may add rows later). */
+    public static List<String> earnedCertCodes(Id userId) {
+        List<String> codes = new List<String>();
+        for (User_Cert__c uc : [
+            SELECT Cert__r.Cert_Code__c FROM User_Cert__c
+            WHERE User__c = :userId AND Cert__c != null
+        ]) {
+            if (uc.Cert__r != null && uc.Cert__r.Cert_Code__c != null) codes.add(uc.Cert__r.Cert_Code__c);
+        }
+        return codes;
+    }
+
+    /** Mark a cert earned (one row per user + cert) or remove the mark. Returns the user's earned codes. */
+    public static List<String> setEarned(Id userId, String certCode, Boolean earned) {
+        if (String.isBlank(certCode)) throw new ServiceException('Pick a certification.');
+        List<Cert__c> certs = [SELECT Id FROM Cert__c WHERE Cert_Code__c = :certCode LIMIT 1];
+        if (certs.isEmpty()) throw new ServiceException('That certification was not found.');
+        String key = String.valueOf(userId) + ':' + String.valueOf(certs[0].Id);
+        if (earned == true) {
+            upsert new User_Cert__c(
+                Unique_Key__c = key, User__c = userId, Cert__c = certs[0].Id, Source__c = 'Self-reported'
+            ) User_Cert__c.Unique_Key__c;
+        } else {
+            delete [SELECT Id FROM User_Cert__c WHERE Unique_Key__c = :key];
+        }
+        return earnedCertCodes(userId);
+    }
+
+    /** Direct prerequisite names per cert Id, for the picker. */
+    public static Map<Id, List<String>> prereqNamesByCert() {
+        Map<Id, List<String>> out = new Map<Id, List<String>>();
+        for (Cert_Prerequisite__c p : [
+            SELECT Cert__c, Prereq_Cert__r.Name
+            FROM Cert_Prerequisite__c
+            WHERE Cert__c != null AND Prereq_Cert__c != null
+            ORDER BY Prereq_Cert__r.Name
+        ]) {
+            if (!out.containsKey(p.Cert__c)) out.put(p.Cert__c, new List<String>());
+            out.get(p.Cert__c).add(p.Prereq_Cert__r.Name);
         }
         return out;
     }

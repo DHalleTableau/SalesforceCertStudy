@@ -1,6 +1,20 @@
 <template>
+    <div class="brand-banner">
+        <div>
+            <div class="brand-title">Salesforce Certification Practice</div>
+            <div class="brand-sub">Practice and mock exams with explanations</div>
+        </div>
+        <div class="brand-chips">
+            <span class="brand-chip">Pilot</span>
+            <span class="brand-chip">{appVersion}</span>
+        </div>
+    </div>
     <lightning-card title="Cert Study" icon-name="standard:education">
         <div slot="actions">
+            <template lwc:if={showRecsButton}>
+                <lightning-button label="Suggest next certs" icon-name="utility:magicwand" onclick={showRecs}
+                    class="slds-m-right_x-small"></lightning-button>
+            </template>
             <template lwc:if={showHistoryButton}>
                 <lightning-button label="My progress" icon-name="utility:trending" onclick={showHistory}
                     class="slds-m-right_x-small"></lightning-button>
@@ -51,7 +65,27 @@
                 </template>
                 <p class="slds-text-body_regular slds-m-bottom_small">{selectHelp}</p>
                 <lightning-input type="search" label="Search certifications" value={filterText}
-                    onchange={handleFilter} class="slds-m-bottom_small"></lightning-input>
+                    onchange={handleFilter} class="slds-m-bottom_x-small"></lightning-input>
+                <div class="slds-grid slds-wrap slds-gutters_x-small slds-m-bottom_x-small">
+                    <div class="slds-col slds-size_1-of-1 slds-medium-size_1-of-2">
+                        <lightning-combobox name="area" label="Product area" value={areaFilter}
+                            options={areaFilterOptions} onchange={handleAreaFilter}></lightning-combobox>
+                    </div>
+                    <div class="slds-col slds-size_1-of-1 slds-medium-size_1-of-2">
+                        <lightning-combobox name="type" label="Type" value={typeFilter}
+                            options={typeFilterOptions} onchange={handleTypeFilter}></lightning-combobox>
+                    </div>
+                </div>
+                <div class="slds-grid slds-wrap slds-gutters_small slds-m-bottom_small">
+                    <div class="slds-col">
+                        <lightning-input type="checkbox" label="Hide retiring exams" checked={hideRetiring}
+                            onchange={handleHideRetiring}></lightning-input>
+                    </div>
+                    <div class="slds-col">
+                        <lightning-input type="checkbox" label={hideEarnedLabel} checked={hideEarned}
+                            onchange={handleHideEarned}></lightning-input>
+                    </div>
+                </div>
                 <template lwc:if={selectedCount}>
                     <div class="slds-m-bottom_small">
                         <template for:each={selectedCerts} for:item="c">
@@ -63,8 +97,19 @@
                 <div class="cert-list slds-box slds-box_x-small">
                     <template for:each={filteredCerts} for:item="c">
                         <div key={c.code} class="cert-row">
-                            <lightning-input type="checkbox" label={c.label} data-code={c.code}
-                                checked={c.checked} onchange={toggleCert}></lightning-input>
+                            <div class="cert-line">
+                                <lightning-input type="checkbox" label={c.label} data-code={c.code}
+                                    checked={c.checked} onchange={toggleCert}></lightning-input>
+                                <template lwc:if={c.hasPrereqs}>
+                                    <span class="prereq-inline">({c.prereqNote})</span>
+                                </template>
+                                <lightning-button variant="base" class="earned-btn" label={c.earnedLabel}
+                                    icon-name={c.earnedIcon} data-code={c.code} onclick={toggleEarned}
+                                    title="Mark certifications you already hold so they can be hidden from the list"></lightning-button>
+                            </div>
+                            <template lwc:if={c.isFlagged}>
+                                <div class="retiring-note">{c.statusNote}</div>
+                            </template>
                         </div>
                     </template>
                 </div>
@@ -286,6 +331,40 @@
                 </div>
             </template>
 
+            <!-- suggested next certs -->
+            <template lwc:if={isRecs}>
+                <p class="slds-text-heading_medium">Suggested next certifications</p>
+                <p class="slds-text-color_weak slds-m-bottom_medium">{recsSubline}</p>
+                <template lwc:if={hasRecs}>
+                    <template for:each={recs} for:item="r">
+                        <div key={r.key} class="rec-card">
+                            <div class="slds-grid slds-grid_vertical-align-center slds-wrap">
+                                <div class="slds-col">
+                                    <div class="rec-name">{r.name}
+                                        <template lwc:if={r.isBroaden}>
+                                            <span class="slds-badge slds-m-left_x-small">Broaden your skills</span>
+                                        </template>
+                                    </div>
+                                    <div class="rec-reason">{r.reason}</div>
+                                </div>
+                                <div class="slds-col slds-grow-none">
+                                    <lightning-button variant="brand" label="Practice this" data-code={r.code}
+                                        onclick={practiceRec} class="slds-m-right_x-small"></lightning-button>
+                                    <lightning-button variant="base" label="I already have this" data-code={r.code}
+                                        onclick={recAlreadyHave}></lightning-button>
+                                </div>
+                            </div>
+                        </div>
+                    </template>
+                </template>
+                <template lwc:else>
+                    <p>No suggestions right now. You may already hold most of what is available.</p>
+                </template>
+                <div class="slds-m-top_medium">
+                    <lightning-button label="Back to certifications" onclick={showSelect}></lightning-button>
+                </div>
+            </template>
+
             <!-- progress history -->
             <template lwc:if={isHistory}>
                 <p class="slds-text-heading_medium">{historyHeadline}</p>
@@ -330,4 +409,14 @@
             </template>
         </div>
     </lightning-card>
+    <div class="brand-footer">
+        <div>
+            Cert Study {appVersion} &middot; {releasedOn} &middot; Built by {ownerName} &middot;
+            <a href={ownerMailto}>{ownerEmail}</a>
+        </div>
+        <div>
+            Internal pilot. Practice questions are AI-generated from study materials and are not official
+            Salesforce exam content.
+        </div>
+    </div>
 </template>

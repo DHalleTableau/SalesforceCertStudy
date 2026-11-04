@@ -30,6 +30,59 @@ private class CertStudyControllerTest {
     }
 
     @IsTest
+    static void listCertsCarriesRetirementStatus() {
+        Id certId = [SELECT Id FROM Cert__c WHERE Cert_Code__c = 'AI-201'].Id;
+        update new Cert__c(
+            Id = certId,
+            Exam_Status__c = 'Retiring',
+            Retires_On__c = Date.newInstance(2027, 2, 1),
+            Path_Forward__c = 'Take the replacement exam.'
+        );
+        List<CertStudyController.CertOption> certs = CertStudyController.listCerts();
+        Assert.areEqual(1, certs.size());
+        Assert.areEqual('Retiring', certs[0].status);
+        Assert.areEqual('Feb 1, 2027', certs[0].retiresOn);
+        Assert.areEqual('Take the replacement exam.', certs[0].pathForward);
+        Assert.isFalse(certs[0].prereqs.isEmpty(), 'AI-201 has a prerequisite in the test data');
+    }
+
+    @IsTest
+    static void earnedCertsAreStoredPerUser() {
+        Assert.isTrue(CertStudyController.getEarnedCerts().isEmpty());
+
+        List<String> after = CertStudyController.setCertEarned('AI-201', true);
+        Assert.areEqual(new List<String>{ 'AI-201' }, after);
+        // Marking it again must not create a duplicate row.
+        CertStudyController.setCertEarned('AI-201', true);
+        Assert.areEqual(1, [SELECT COUNT() FROM User_Cert__c]);
+        Assert.areEqual('Self-reported', [SELECT Source__c FROM User_Cert__c].Source__c);
+
+        // A different user sees none of it.
+        User other = new User(
+            Alias = 'other', Email = 'other@example.com', Username = 'other.earned@example.com.test',
+            LastName = 'Other', ProfileId = UserInfo.getProfileId(), TimeZoneSidKey = 'America/Los_Angeles',
+            LocaleSidKey = 'en_US', EmailEncodingKey = 'UTF-8', LanguageLocaleKey = 'en_US'
+        );
+        insert other;
+        System.runAs(other) {
+            Assert.isTrue(CertStudyController.getEarnedCerts().isEmpty());
+        }
+
+        Assert.isTrue(CertStudyController.setCertEarned('AI-201', false).isEmpty());
+        Assert.areEqual(0, [SELECT COUNT() FROM User_Cert__c]);
+    }
+
+    @IsTest
+    static void earnedCertRejectsUnknownCert() {
+        try {
+            CertStudyController.setCertEarned('NOPE-999', true);
+            Assert.fail('expected an error');
+        } catch (AuraHandledException e) {
+            Assert.isTrue(e.getMessage().contains('not found'));
+        }
+    }
+
+    @IsTest
     static void fullPracticeFlow() {
         CertStudyLlm.instance = new NoopLlm();
         List<CertStudyController.CertOption> certs = CertStudyController.listCerts();

@@ -7,7 +7,7 @@
  * USERNAME_SUFFIX), so an internal user who shares the email never can.
  */
 global without sharing class CertStudyLoginDiscoveryHandler implements Auth.LoginDiscoveryHandler {
-    public static final String GENERIC_ERROR = 'We could not find a Cert Study account for that email. Register first, or check the address.';
+    public static final String GENERIC_ERROR = 'No Cert Study account found for that email. New here? Click "Sign Up" below the Log In button and register with your @salesforce.com email first.';
 
     global PageReference login(String identifier, String startUrl, Map<String, String> requestAttributes) {
         Id userId = findUserId(identifier);

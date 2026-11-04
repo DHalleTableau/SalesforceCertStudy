@@ -15,6 +15,10 @@ public with sharing class CertStudyController {
         @AuraEnabled public String code;
         @AuraEnabled public String name;
         @AuraEnabled public Boolean isAggregate;
+        @AuraEnabled public String status;       // Retiring / Retired / Renamed; null = active
+        @AuraEnabled public String retiresOn;    // e.g. "Feb 1, 2027"
+        @AuraEnabled public String pathForward;
+        @AuraEnabled public List<String> prereqs = new List<String>(); // direct prerequisite names
     }
 
     public class OptionView {
@@ -184,14 +188,41 @@ public with sharing class CertStudyController {
     public static List<CertOption> listCerts() {
         List<CertOption> out = new List<CertOption>();
         // Queried in the without-sharing service: Cert__c is Private for external users.
+        Map<Id, List<String>> prereqs = CertStudyService.prereqNamesByCert();
         for (Cert__c c : CertStudyService.usableCerts()) {
             CertOption o = new CertOption();
+            if (prereqs.containsKey(c.Id)) o.prereqs = prereqs.get(c.Id);
             o.code = c.Cert_Code__c;
             o.name = c.Name;
             o.isAggregate = c.Is_Aggregate__c;
+            o.status = c.Exam_Status__c;
+            o.retiresOn = c.Retires_On__c == null
+                ? null
+                : Datetime.newInstanceGmt(c.Retires_On__c, Time.newInstance(0, 0, 0, 0)).formatGmt('MMM d, yyyy');
+            o.pathForward = c.Path_Forward__c;
             out.add(o);
         }
         return out;
+    }
+
+    /** Cert codes the current learner has marked as earned. */
+    @AuraEnabled
+    public static List<String> getEarnedCerts() {
+        try {
+            return CertStudyService.earnedCertCodes(UserInfo.getUserId());
+        } catch (Exception e) {
+            throw wrap(e);
+        }
+    }
+
+    /** Mark or unmark a cert as earned for the current learner; returns the updated list of earned codes. */
+    @AuraEnabled
+    public static List<String> setCertEarned(String certCode, Boolean earned) {
+        try {
+            return CertStudyService.setEarned(UserInfo.getUserId(), certCode, earned);
+        } catch (Exception e) {
+            throw wrap(e);
+        }
     }
 
     /** Resume point on page load: the active session and its current question, if any. */

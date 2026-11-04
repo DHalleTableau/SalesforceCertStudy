@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>Exam_Status__c</fullName>
+    <description>Blank = active. Set from Salesforce's published retirement/rename lists.</description>
+    <externalId>false</externalId>
+    <label>Exam Status</label>
+    <required>false</required>
+    <type>Picklist</type>
+    <valueSet>
+        <restricted>true</restricted>
+        <valueSetDefinition>
+            <sorted>false</sorted>
+            <value>
+                <fullName>Retiring</fullName>
+                <default>false</default>
+                <label>Retiring</label>
+            </value>
+            <value>
+                <fullName>Retired</fullName>
+                <default>false</default>
+                <label>Retired</label>
+            </value>
+            <value>
+                <fullName>Renamed</fullName>
+                <default>false</default>
+                <label>Renamed</label>
+            </value>
+        </valueSetDefinition>
+    </valueSet>
+</CustomField>
