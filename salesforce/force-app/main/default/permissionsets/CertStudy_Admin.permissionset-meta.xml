@@ -51,6 +51,26 @@
     <description>Admin: full access to Cert Study data, tabs and classes.</description>
     <fieldPermissions>
         <editable>true</editable>
+        <field>Contribution__c.Note_To_Learner__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>true</editable>
+        <field>Question_Report__c.Note_To_Learner__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>false</editable>
+        <field>Contribution__c.Reply_Sent_At__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>false</editable>
+        <field>Question_Report__c.Reply_Sent_At__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>true</editable>
         <field>Study_Link__c.Cert__c</field>
         <readable>true</readable>
     </fieldPermissions>

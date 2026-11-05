@@ -5,12 +5,18 @@
 // Learner-facing only; remove an item when it ships (and add it to RELEASES).
 export const UPCOMING = [
     'A personal stats dashboard: your scores over time, by certification and section, and how close you are to passing.',
-    'Updates on problems you report and resources you share, so you know when they have been reviewed or fixed.',
     'Non-Salesforce certifications, starting with AI certifications that are useful at work.',
     'Logging in with Salesforce single sign-on, instead of waiting for an email code.'
 ];
 
 export const RELEASES = [
+    {
+        version: 'v0.13.0',
+        date: 'Nov 5, 2026',
+        items: [
+            'You now get an email when a problem you reported is fixed or closed, and when a study resource or suggestion you sent is reviewed.'
+        ]
+    },
     {
         version: 'v0.12.0',
         date: 'Nov 5, 2026',

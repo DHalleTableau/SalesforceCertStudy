@@ -1,4 +1,12 @@
-/** When an admin approves a study resource, create a Cert Resource from it (once) and link it back. */
-trigger ContributionTrigger on Contribution__c (before update) {
-    CertStudyService.onContributionsApproved(Trigger.new, Trigger.oldMap);
+/**
+ * Before update: approving a study resource creates a Cert Resource from it (once) and links it;
+ * a decision (Approved/Rejected) stamps Reply_Sent_At__c. After update: sends the decision email.
+ */
+trigger ContributionTrigger on Contribution__c (before update, after update) {
+    if (Trigger.isBefore) {
+        CertStudyService.onContributionsApproved(Trigger.new, Trigger.oldMap);
+        CertStudyReplies.stampDecisions(Trigger.new, Trigger.oldMap);
+    } else {
+        CertStudyReplies.sendStamped(Trigger.new, Trigger.oldMap);
+    }
 }

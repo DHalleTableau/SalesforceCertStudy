@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>Note_To_Learner__c</fullName>
+    <description>Optional message included in the automatic decision email to the submitter. Reviewer Notes stay internal.</description>
+    <inlineHelpText>Optional. Fill this in BEFORE setting the final status: it goes into the email to the submitter. Reviewer Notes are never sent.</inlineHelpText>
+    <label>Note to Learner</label>
+    <length>2000</length>
+    <type>LongTextArea</type>
+    <visibleLines>4</visibleLines>
+</CustomField>

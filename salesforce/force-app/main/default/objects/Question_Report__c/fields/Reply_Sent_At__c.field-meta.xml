@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>Reply_Sent_At__c</fullName>
+    <description>When the automatic decision email went to the reporter. Set once; a later status change does not send another.</description>
+    <inlineHelpText>Set automatically when the reporter is emailed about the decision.</inlineHelpText>
+    <label>Reply Sent At</label>
+    <required>false</required>
+    <type>DateTime</type>
+</CustomField>

@@ -22,6 +22,10 @@
                 <behavior>Readonly</behavior>
                 <field>Submitted_At__c</field>
             </layoutItems>
+            <layoutItems>
+                <behavior>Readonly</behavior>
+                <field>Reply_Sent_At__c</field>
+            </layoutItems>
         </layoutColumns>
         <layoutColumns>
             <layoutItems>
@@ -66,6 +70,10 @@
         <editHeading>true</editHeading>
         <label>Review</label>
         <layoutColumns>
+            <layoutItems>
+                <behavior>Edit</behavior>
+                <field>Note_To_Learner__c</field>
+            </layoutItems>
             <layoutItems>
                 <behavior>Edit</behavior>
                 <field>Reviewer_Notes__c</field>

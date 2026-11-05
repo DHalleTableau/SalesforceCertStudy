@@ -25,7 +25,7 @@ const POLL_MS = 4000;
 const MAX_POLLS = 45; // ~3 minutes
 
 // Shown in the banner/footer. Bump APP_VERSION and APP_RELEASED on each release.
-const APP_VERSION = 'v0.12.0';
+const APP_VERSION = 'v0.13.0';
 const APP_RELEASED = 'Nov 5, 2026';
 const OWNER_NAME = 'Daniel Halle';
 const OWNER_EMAIL = 'daniel.halle@salesforce.com';
