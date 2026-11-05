@@ -798,7 +798,8 @@ public without sharing class CertStudyService {
 
     /** Scores the test and ends the session. */
     public static TestResult finishTest(Study_Session__c s, Boolean timedOut) {
-        if (s.Completed_At__c == null) {
+        Boolean firstFinish = s.Completed_At__c == null;
+        if (firstFinish) {
             stopClock(s);
             s.Completed_At__c = DateTime.now();
             s.Paused__c = false;
@@ -806,6 +807,10 @@ public without sharing class CertStudyService {
         }
         TestResult r = testResult(s);
         r.timedOut = timedOut == true;
+        if (firstFinish) {
+            // Stored for reporting (usage dashboard); the app itself always recomputes.
+            update new Study_Session__c(Id = s.Id, Score_Pct__c = r.officialPct, Passed__c = r.passed);
+        }
         if (s.Status__c == ACTIVE) {
             endSessions(new List<Study_Session__c>{ s });
             s.Status__c = ENDED;

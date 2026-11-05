@@ -50,6 +50,16 @@
     </classAccesses>
     <description>Admin: full access to Cert Study data, tabs and classes.</description>
     <fieldPermissions>
+        <editable>false</editable>
+        <field>Study_Session__c.Score_Pct__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>false</editable>
+        <field>Study_Session__c.Passed__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
         <editable>true</editable>
         <field>Contribution__c.Note_To_Learner__c</field>
         <readable>true</readable>

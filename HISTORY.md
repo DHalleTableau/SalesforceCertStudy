@@ -630,3 +630,24 @@ fallback for "any employee, no manual provisioning."
   no customer data is the right shape. A persisting SDO as host isn't confirmed as sanctioned: ask in
   #q-branch-sdo and treat it as a pilot. The app's data is in custom objects, not Data 360, so a backup and
   rebuild script is needed.
+
+## Nov 5, 2026: Trailhead links, admin digest, decision emails, dashboard groundwork
+
+- **Trailhead study links (v0.12.0).** Official prep links show after every practice session and test, with
+  links for weak sections first, plus a running list in My progress. All 33 URLs were opened and checked; one
+  ("Get Ready for Agentforce") was beginner content, not exam prep, and was switched off rather than deleted.
+- **Test hit 101 SOQL queries again.** The new link lookups pushed one long history test over the limit;
+  it was split into three focused tests. Test-only, as before.
+- **A colleague's 79k-character study guide** was too long for the contribution's Details field (32k). It was
+  approved with a short note and its text loaded straight into the created Cert Resource (131k). Exam-format
+  guesses in the guide were cut so they can't leak into generated questions. The source folder is gitignored.
+- **Daily digest.** The admin user's time zone is Europe/Paris, so a plain "3pm" cron would have fired at 6am
+  Pacific. The job now wakes hourly and sends only at 15:00 America/Los_Angeles, which also survives DST.
+  `System.schedule` returns a 15-char Id; normalized to 18 so the idempotency check works.
+- **Decision emails (v0.13.0).** Reviewer Notes were designed as internal, so emailing them would have leaked
+  admin comments; a separate "Note to Learner" field carries the message instead. One email per item, ever.
+- **Usage dashboard: Tableau Next, not a Lightning dashboard.** The analytics connector available to the
+  assistant points at Org62 (view-only), so the certstudy org is configured by hand. Test scores were only
+  computed on the fly, so Score % and Passed are now stored on test finish (with a backfill) for reporting.
+  Data Cloud CRM data streams created for the 9 custom objects.
+

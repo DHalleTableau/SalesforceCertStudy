@@ -498,6 +498,9 @@ private class CertStudyControllerTest {
         CertStudyController.HistorySession testRow = findRow(CertStudyController.getHistory(), true);
         Assert.isNotNull(CertStudyController.getSessionDetail(testRow.id).test);
         Test.stopTest();
+        Study_Session__c stored = [SELECT Score_Pct__c, Passed__c FROM Study_Session__c WHERE Id = :testRow.id];
+        Assert.areEqual(33, stored.Score_Pct__c, 'score is stored for reporting');
+        Assert.isFalse(stored.Passed__c);
     }
 
     @IsTest
