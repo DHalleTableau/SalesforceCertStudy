@@ -14,6 +14,7 @@ import getHistory from '@salesforce/apex/CertStudyController.getHistory';
 import getSessionDetail from '@salesforce/apex/CertStudyController.getSessionDetail';
 import getEarnedCerts from '@salesforce/apex/CertStudyController.getEarnedCerts';
 import setCertEarned from '@salesforce/apex/CertStudyController.setCertEarned';
+import reportQuestion from '@salesforce/apex/CertStudyController.reportQuestion';
 import LightningConfirm from 'lightning/confirm';
 import { recommend } from './certRecommendations';
 import { ALL, certType, certArea, typeOptions as buildTypeOptions, areaOptions as buildAreaOptions } from './certCategories';
@@ -22,8 +23,8 @@ const POLL_MS = 4000;
 const MAX_POLLS = 45; // ~3 minutes
 
 // Shown in the banner/footer. Bump APP_VERSION and APP_RELEASED on each release.
-const APP_VERSION = 'v0.10.0';
-const APP_RELEASED = 'Nov 4, 2026';
+const APP_VERSION = 'v0.11.0';
+const APP_RELEASED = 'Nov 5, 2026';
 const OWNER_NAME = 'Daniel Halle';
 const OWNER_EMAIL = 'daniel.halle@salesforce.com';
 
@@ -342,6 +343,7 @@ export default class CertStudy extends LightningElement {
         }
         this.session = v;
         this.grade = undefined;
+        this.resetReport();
         this.syncClock(v);
         if (v.isTest && v.isPaused) {
             this.stopPolling();
@@ -689,6 +691,7 @@ export default class CertStudy extends LightningElement {
     }
 
     async next() {
+        this.resetReport();
         this.busy = true;
         this.error = undefined;
         try {
@@ -936,7 +939,77 @@ export default class CertStudy extends LightningElement {
 
     // ---------------------------------------------------------- keyboard
 
+    // -------------------------------------------------- report a problem
+
+    reportOpen = false;
+    reportType = '';
+    reportComment = '';
+    reportError;
+    reportSending = false;
+    reportedIds = []; // question ids already reported this visit
+
+    get reportTypeOptions() {
+        return [
+            { label: 'Inaccurate or factually wrong', value: 'Inaccurate' },
+            { label: 'More than one correct answer', value: 'Multiple correct answers' },
+            { label: 'No correct answer', value: 'No correct answer' },
+            { label: 'Outdated: missing a recent product update', value: 'Outdated' },
+            { label: 'Unclear or badly worded', value: 'Unclear wording' },
+            { label: 'The explanation is wrong', value: 'Explanation is wrong' },
+            { label: 'Other', value: 'Other' }
+        ];
+    }
+
+    get reportQuestionId() {
+        if (this.view === 'feedback') return this.grade && this.grade.question ? this.grade.question.id : undefined;
+        return this.question ? this.question.id : undefined;
+    }
+
+    get reportAlreadySent() { return this.reportedIds.includes(this.reportQuestionId); }
+    get showReportLink() { return !!this.reportQuestionId && !this.reportOpen && !this.reportAlreadySent; }
+    get showReportForm() { return !!this.reportQuestionId && this.reportOpen && !this.reportAlreadySent; }
+    get reportSendDisabled() { return this.reportSending || !this.reportType; }
+    get reportCommentRequired() { return this.reportType === 'Other'; }
+
+    openReport() {
+        this.reportOpen = true;
+        this.reportError = undefined;
+    }
+
+    cancelReport() { this.resetReport(); }
+
+    resetReport() {
+        this.reportOpen = false;
+        this.reportType = '';
+        this.reportComment = '';
+        this.reportError = undefined;
+        this.reportSending = false;
+    }
+
+    changeReportType(event) { this.reportType = event.detail.value; }
+    changeReportComment(event) { this.reportComment = event.target.value; }
+
+    async sendReport() {
+        const qid = this.reportQuestionId;
+        if (!qid || !this.reportType) return;
+        if (this.reportCommentRequired && !(this.reportComment || '').trim()) {
+            this.reportError = 'Please describe the problem.';
+            return;
+        }
+        this.reportSending = true;
+        this.reportError = undefined;
+        try {
+            await reportQuestion({ questionId: qid, issueType: this.reportType, comment: this.reportComment });
+            this.reportedIds = [...this.reportedIds, qid];
+            this.resetReport();
+        } catch (e) {
+            this.reportError = (e && e.body && e.body.message) || 'Could not send the report. Please try again.';
+            this.reportSending = false;
+        }
+    }
+
     handleKey(event) {
+        if (this.reportOpen) return; // typing a report: no answer shortcuts
         const tag = (event.target && event.target.tagName) || '';
         if (['INPUT', 'TEXTAREA'].includes(tag) || event.metaKey || event.ctrlKey || event.altKey) return;
         if (this.view === 'question') {

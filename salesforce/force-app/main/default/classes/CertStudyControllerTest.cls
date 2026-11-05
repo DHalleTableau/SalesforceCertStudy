@@ -83,6 +83,67 @@ private class CertStudyControllerTest {
     }
 
     @IsTest
+    static void questionReportsAreValidatedScopedAndDeduplicated() {
+        CertStudyLlm.instance = new NoopLlm();
+        CertStudyController.SessionView v = CertStudyController.startPractice(new List<String>{ 'AI-201' }, null);
+        v = CertStudyController.startPractice(new List<String>{ 'AI-201' }, '{"AI-201": false}');
+        String qid = v.question.id;
+
+        // Validation
+        for (List<String> bad : new List<List<String>>{
+            new List<String>{ qid, null, 'x' }, new List<String>{ qid, 'Bogus', 'x' }, new List<String>{ qid, 'Other', ' ' }
+        }) {
+            try {
+                CertStudyController.reportQuestion(bad[0], bad[1], bad[2]);
+                Assert.fail('expected an error');
+            } catch (AuraHandledException e) {
+                Assert.isNotNull(e.getMessage());
+            }
+        }
+        try {
+            CertStudyController.reportQuestion('not-an-id', 'Inaccurate', 'x');
+            Assert.fail('expected an error');
+        } catch (AuraHandledException e) {
+            Assert.isTrue(e.getMessage().contains('not found'));
+        }
+
+        CertStudyController.reportQuestion(qid, 'Inaccurate', 'Option B is wrong');
+        Question_Report__c r = [
+            SELECT Issue_Type__c, Comment__c, Status__c, Reporter__c, Cert__c, Question__c FROM Question_Report__c
+        ];
+        Assert.areEqual('Inaccurate', r.Issue_Type__c);
+        Assert.areEqual('New', r.Status__c);
+        Assert.areEqual(UserInfo.getUserId(), r.Reporter__c);
+        Assert.isNotNull(r.Cert__c);
+
+        // A second report on the same question is appended to the open one; nothing is overwritten.
+        CertStudyController.reportQuestion(qid, 'Multiple correct answers', 'C is also right');
+        Assert.areEqual(1, [SELECT COUNT() FROM Question_Report__c]);
+        Question_Report__c again = [SELECT Issue_Type__c, Comment__c FROM Question_Report__c];
+        Assert.areEqual('Inaccurate', again.Issue_Type__c, 'original type kept');
+        Assert.isTrue(again.Comment__c.startsWith('Option B is wrong'), 'original text kept');
+        Assert.isTrue(again.Comment__c.contains('follow-up: Multiple correct answers'));
+        Assert.isTrue(again.Comment__c.contains('C is also right'));
+
+        // Another learner cannot report a question from someone else's session.
+        User other = new User(
+            Alias = 'rep2', Email = 'rep2@example.com', Username = 'rep2.report@example.com.test',
+            LastName = 'Other', ProfileId = UserInfo.getProfileId(), TimeZoneSidKey = 'America/Los_Angeles',
+            LocaleSidKey = 'en_US', EmailEncodingKey = 'UTF-8', LanguageLocaleKey = 'en_US'
+        );
+        insert other;
+        System.runAs(other) {
+            try {
+                CertStudyController.reportQuestion(qid, 'Inaccurate', 'x');
+                Assert.fail('expected an error');
+            } catch (AuraHandledException e) {
+                Assert.isTrue(e.getMessage().contains('not found'));
+            }
+        }
+        Assert.areEqual(1, [SELECT COUNT() FROM Question_Report__c]);
+    }
+
+    @IsTest
     static void fullPracticeFlow() {
         CertStudyLlm.instance = new NoopLlm();
         List<CertStudyController.CertOption> certs = CertStudyController.listCerts();

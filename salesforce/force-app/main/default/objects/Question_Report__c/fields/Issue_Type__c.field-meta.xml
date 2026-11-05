@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>Issue_Type__c</fullName>
+    <label>Issue Type</label>
+    <required>false</required>
+    <type>Picklist</type>
+    <valueSet>
+        <restricted>true</restricted>
+        <valueSetDefinition>
+            <sorted>false</sorted>
+            <value><fullName>Inaccurate</fullName><default>false</default><label>Inaccurate</label></value>
+            <value><fullName>Multiple correct answers</fullName><default>false</default><label>Multiple correct answers</label></value>
+            <value><fullName>No correct answer</fullName><default>false</default><label>No correct answer</label></value>
+            <value><fullName>Outdated</fullName><default>false</default><label>Outdated</label></value>
+            <value><fullName>Unclear wording</fullName><default>false</default><label>Unclear wording</label></value>
+            <value><fullName>Explanation is wrong</fullName><default>false</default><label>Explanation is wrong</label></value>
+            <value><fullName>Other</fullName><default>false</default><label>Other</label></value>
+        </valueSetDefinition>
+    </valueSet>
+</CustomField>

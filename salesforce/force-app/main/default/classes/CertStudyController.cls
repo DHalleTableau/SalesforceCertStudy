@@ -225,6 +225,16 @@ public with sharing class CertStudyController {
         }
     }
 
+    /** Report a problem with a question the current learner was served. */
+    @AuraEnabled
+    public static void reportQuestion(String questionId, String issueType, String comment) {
+        try {
+            CertStudyService.reportQuestion(UserInfo.getUserId(), questionId, issueType, comment);
+        } catch (Exception e) {
+            throw wrap(e);
+        }
+    }
+
     /** Resume point on page load: the active session and its current question, if any. */
     @AuraEnabled
     public static SessionView getActiveSession() {

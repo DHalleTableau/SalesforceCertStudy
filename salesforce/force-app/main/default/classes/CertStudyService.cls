@@ -94,6 +94,69 @@ public without sharing class CertStudyService {
         return earnedCertCodes(userId);
     }
 
+    public static final Integer MAX_REPORTS_PER_HOUR = 20;
+    public static final Integer MAX_REPORT_COMMENT = 2000;   // per message
+    public static final Integer MAX_REPORT_THREAD = 32000;   // whole Comment__c (field holds 32,768)
+    public static final Set<String> REPORT_TYPES = new Set<String>{
+        'Inaccurate', 'Multiple correct answers', 'No correct answer', 'Outdated',
+        'Unclear wording', 'Explanation is wrong', 'Other'
+    };
+
+    /**
+     * Save a learner's report on a question they were served. The question must belong to one of the
+     * learner's own sessions; reports are rate limited. A repeat report on the same question by the
+     * same learner is appended to their earlier open report (original type and text are kept).
+     */
+    public static void reportQuestion(Id userId, String questionId, String issueType, String comment) {
+        if (String.isBlank(questionId)) throw new ServiceException('Question not found.');
+        if (String.isBlank(issueType) || !REPORT_TYPES.contains(issueType)) {
+            throw new ServiceException('Pick the type of problem.');
+        }
+        String text = String.isBlank(comment) ? null : comment.trim();
+        if (issueType == 'Other' && text == null) throw new ServiceException('Please describe the problem.');
+        if (text != null && text.length() > MAX_REPORT_COMMENT) text = text.substring(0, MAX_REPORT_COMMENT);
+
+        Id qid;
+        try {
+            qid = Id.valueOf(questionId);
+        } catch (Exception e) {
+            throw new ServiceException('Question not found.');
+        }
+        List<Question__c> qs = [
+            SELECT Id, Cert__c, Study_Session__r.User_Key__c FROM Question__c WHERE Id = :qid LIMIT 1
+        ];
+        if (qs.isEmpty() || qs[0].Study_Session__r == null || qs[0].Study_Session__r.User_Key__c != String.valueOf(userId)) {
+            throw new ServiceException('Question not found.');
+        }
+
+        DateTime since = DateTime.now().addHours(-1);
+        if ([SELECT COUNT() FROM Question_Report__c WHERE Reporter__c = :userId AND Reported_At__c >= :since] >= MAX_REPORTS_PER_HOUR) {
+            throw new ServiceException('You have sent a lot of reports in the last hour. Please try again later.');
+        }
+
+        List<Question_Report__c> open = [
+            SELECT Id, Issue_Type__c, Comment__c FROM Question_Report__c
+            WHERE Reporter__c = :userId AND Question__c = :qid AND Status__c IN ('New', 'Reviewing') LIMIT 1
+        ];
+        if (open.isEmpty()) {
+            insert new Question_Report__c(
+                Question__c = qid, Cert__c = qs[0].Cert__c, Reporter__c = userId, Status__c = 'New',
+                Issue_Type__c = issueType, Comment__c = text, Reported_At__c = DateTime.now()
+            );
+            return;
+        }
+        // Same learner, same question, still open: append to the existing issue so nothing is overwritten
+        // and per-cert counts stay one row per learner per question.
+        Question_Report__c r = open[0];
+        String entry = '[' + DateTime.now().formatGmt('yyyy-MM-dd HH:mm') + ' UTC, follow-up: ' + issueType + ']'
+            + (text == null ? '' : '\n' + text);
+        String combined = String.isBlank(r.Comment__c) ? entry : r.Comment__c + '\n\n' + entry;
+        if (combined.length() > MAX_REPORT_THREAD) {
+            throw new ServiceException('This issue already has a lot of detail. An admin will review it soon.');
+        }
+        update new Question_Report__c(Id = r.Id, Comment__c = combined);
+    }
+
     /** Direct prerequisite names per cert Id, for the picker. */
     public static Map<Id, List<String>> prereqNamesByCert() {
         Map<Id, List<String>> out = new Map<Id, List<String>>();

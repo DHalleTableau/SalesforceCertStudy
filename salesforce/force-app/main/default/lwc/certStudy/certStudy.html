@@ -172,6 +172,33 @@
                         disabled={submitDisabled}></lightning-button>
                     <span class="slds-m-left_small slds-text-color_weak">{chooseText} Tip: press A–E, then Enter.</span>
                 </div>
+                <div class="slds-m-top_small">
+                    <template lwc:if={showReportLink}>
+                        <lightning-button variant="base" label="Report a problem with this question"
+                            icon-name="utility:flag" onclick={openReport}></lightning-button>
+                    </template>
+                    <template lwc:if={reportAlreadySent}>
+                        <span class="slds-text-color_weak">Thanks, your report was sent.</span>
+                    </template>
+                    <template lwc:if={showReportForm}>
+                        <div class="report-box">
+                            <lightning-combobox name="reportType" label="What is the problem?" value={reportType}
+                                options={reportTypeOptions} placeholder="Choose a type" onchange={changeReportType}
+                                required></lightning-combobox>
+                            <lightning-textarea name="reportComment" label="Details (optional unless Other)"
+                                value={reportComment} maxlength="2000" onchange={changeReportComment}
+                                required={reportCommentRequired}></lightning-textarea>
+                            <template lwc:if={reportError}>
+                                <p class="slds-text-color_error slds-m-top_x-small">{reportError}</p>
+                            </template>
+                            <div class="slds-m-top_x-small">
+                                <lightning-button variant="brand" label="Send report" onclick={sendReport}
+                                    disabled={reportSendDisabled} class="slds-m-right_x-small"></lightning-button>
+                                <lightning-button label="Cancel" onclick={cancelReport}></lightning-button>
+                            </div>
+                        </div>
+                    </template>
+                </div>
             </template>
 
             <!-- feedback: stays on screen until Next -->
@@ -205,6 +232,33 @@
                 <div class="slds-m-top_medium">
                     <lightning-button variant="brand" label="Next question" onclick={next} disabled={busy}></lightning-button>
                     <span class="slds-m-left_small slds-text-color_weak">or press Enter</span>
+                </div>
+                <div class="slds-m-top_small">
+                    <template lwc:if={showReportLink}>
+                        <lightning-button variant="base" label="Report a problem with this question"
+                            icon-name="utility:flag" onclick={openReport}></lightning-button>
+                    </template>
+                    <template lwc:if={reportAlreadySent}>
+                        <span class="slds-text-color_weak">Thanks, your report was sent.</span>
+                    </template>
+                    <template lwc:if={showReportForm}>
+                        <div class="report-box">
+                            <lightning-combobox name="reportType" label="What is the problem?" value={reportType}
+                                options={reportTypeOptions} placeholder="Choose a type" onchange={changeReportType}
+                                required></lightning-combobox>
+                            <lightning-textarea name="reportComment" label="Details (optional unless Other)"
+                                value={reportComment} maxlength="2000" onchange={changeReportComment}
+                                required={reportCommentRequired}></lightning-textarea>
+                            <template lwc:if={reportError}>
+                                <p class="slds-text-color_error slds-m-top_x-small">{reportError}</p>
+                            </template>
+                            <div class="slds-m-top_x-small">
+                                <lightning-button variant="brand" label="Send report" onclick={sendReport}
+                                    disabled={reportSendDisabled} class="slds-m-right_x-small"></lightning-button>
+                                <lightning-button label="Cancel" onclick={cancelReport}></lightning-button>
+                            </div>
+                        </div>
+                    </template>
                 </div>
             </template>
 
