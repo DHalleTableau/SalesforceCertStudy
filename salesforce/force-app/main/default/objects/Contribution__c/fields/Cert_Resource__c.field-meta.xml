@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>Cert_Resource__c</fullName>
+    <description>Set automatically when an approved study resource is turned into a Cert Resource.</description>
+    <label>Created Cert Resource</label>
+    <referenceTo>Cert_Resource__c</referenceTo>
+    <relationshipLabel>Contributions</relationshipLabel>
+    <relationshipName>Contributions</relationshipName>
+    <deleteConstraint>SetNull</deleteConstraint>
+    <required>false</required>
+    <type>Lookup</type>
+</CustomField>

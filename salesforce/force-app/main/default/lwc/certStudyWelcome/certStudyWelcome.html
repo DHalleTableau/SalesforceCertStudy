@@ -1,0 +1,24 @@
+<template>
+    <div class="welcome">
+        <div class="banner">
+            <div class="title">{heading}</div>
+            <div class="sub">{tagline}</div>
+        </div>
+        <div class="columns">
+            <div class="col">
+                <div class="step-label">New here?</div>
+                <p class="body">Create a free account with your <strong>@salesforce.com</strong> email. It takes a minute.</p>
+                <template lwc:if={hasSignUp}>
+                    <button class="cta" type="button" onclick={goSignUp}>Create your account</button>
+                </template>
+                <template lwc:else>
+                    <p class="body hint">Use the <strong>Sign Up</strong> link under the Log In button below.</p>
+                </template>
+            </div>
+            <div class="col">
+                <div class="step-label">Already registered?</div>
+                <p class="body">Enter your @salesforce.com email below and choose <strong>Log In</strong>. We'll email you a verification code. No password needed.</p>
+            </div>
+        </div>
+    </div>
+</template>

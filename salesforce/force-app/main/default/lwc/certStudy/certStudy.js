@@ -15,15 +15,17 @@ import getSessionDetail from '@salesforce/apex/CertStudyController.getSessionDet
 import getEarnedCerts from '@salesforce/apex/CertStudyController.getEarnedCerts';
 import setCertEarned from '@salesforce/apex/CertStudyController.setCertEarned';
 import reportQuestion from '@salesforce/apex/CertStudyController.reportQuestion';
+import submitContribution from '@salesforce/apex/CertStudyController.submitContribution';
 import LightningConfirm from 'lightning/confirm';
 import { recommend } from './certRecommendations';
+import { RELEASES, UPCOMING } from './releaseNotes';
 import { ALL, certType, certArea, typeOptions as buildTypeOptions, areaOptions as buildAreaOptions } from './certCategories';
 
 const POLL_MS = 4000;
 const MAX_POLLS = 45; // ~3 minutes
 
 // Shown in the banner/footer. Bump APP_VERSION and APP_RELEASED on each release.
-const APP_VERSION = 'v0.11.0';
+const APP_VERSION = 'v0.12.0';
 const APP_RELEASED = 'Nov 5, 2026';
 const OWNER_NAME = 'Daniel Halle';
 const OWNER_EMAIL = 'daniel.halle@salesforce.com';
@@ -106,6 +108,33 @@ export default class CertStudy extends LightningElement {
     get isTestResult() { return this.view === 'testResult'; }
     get isHistory() { return this.view === 'history'; }
     get isRecs() { return this.view === 'recs'; }
+    get isContribute() { return this.view === 'contribute'; }
+    get isWhatsNew() { return this.view === 'whatsNew'; }
+
+    whatsNewReturnView = 'select';
+
+    get upcoming() { return UPCOMING.map((text, i) => ({ key: 'u' + i, text })); }
+    get hasUpcoming() { return UPCOMING.length > 0; }
+
+    get releases() {
+        return RELEASES.map((r) => ({
+            ...r,
+            isCurrent: r.version === APP_VERSION,
+            lines: r.items.map((text, i) => ({ key: r.version + i, text }))
+        }));
+    }
+
+    showWhatsNew() {
+        if (this.view === 'whatsNew') return;
+        this.whatsNewReturnView = this.view;
+        this.view = 'whatsNew';
+    }
+
+    closeWhatsNew() {
+        const back = this.whatsNewReturnView;
+        if (!back || back === 'select' || back === 'loading') this.showSelect();
+        else this.view = back;
+    }
     get showHistoryButton() { return ['select', 'summary', 'testResult', 'recs'].includes(this.view) && !this.busy; }
     get showRecsButton() { return ['select', 'summary', 'testResult', 'history'].includes(this.view) && !this.busy; }
     get inSession() { return ['question', 'feedback', 'waiting', 'paused'].includes(this.view); }
@@ -551,7 +580,8 @@ export default class CertStudy extends LightningElement {
                 barStyle: `width:${d.answered ? d.pct : 0}%`
             })),
             recommendations: (r.recommendations || []).map((t, i) => ({ key: 'r' + i, text: t })),
-            missed: (r.missed || []).map((m, i) => ({ ...m, key: 'm' + i, feedbackBlocks: this.splitBlocks(m.feedback) }))
+            missed: (r.missed || []).map((m, i) => ({ ...m, key: 'm' + i, feedbackBlocks: this.splitBlocks(m.feedback) })),
+            studyLinks: this.mapLinks(r.studyLinks)
         };
         this.view = 'testResult';
     }
@@ -758,7 +788,8 @@ export default class CertStudy extends LightningElement {
             this.summary = {
                 ...s,
                 missed: (s.missed || []).map((m, i) => ({ ...m, key: 'm' + i, feedbackBlocks: this.splitBlocks(m.feedback) })),
-                areas: (s.areas || []).map((a, i) => ({ ...a, key: 'a' + i, barStyle: `width:${a.pct}%` }))
+                areas: (s.areas || []).map((a, i) => ({ ...a, key: 'a' + i, barStyle: `width:${a.pct}%` })),
+                studyLinks: this.mapLinks(s.studyLinks)
             };
             this.view = 'summary';
         } catch (e) {
@@ -855,6 +886,7 @@ export default class CertStudy extends LightningElement {
             this.history = {
                 ...h,
                 weakAreas: (h.weakAreas || []).map((a, i) => ({ ...a, key: 'w' + i, barStyle: `width:${a.pct}%` })),
+                suggestedLinks: this.mapLinks(h.suggestedLinks, fmt),
                 sessions: (h.sessions || []).map((x) => {
                     let scoreText;
                     let badge = '';
@@ -903,6 +935,20 @@ export default class CertStudy extends LightningElement {
         return `${h.sessionsCount} session(s)${tests}`;
     }
 
+    get hasSuggestedLinks() { return this.history && this.history.suggestedLinks.length > 0; }
+    get hasSummaryLinks() { return this.summary && this.summary.studyLinks && this.summary.studyLinks.length > 0; }
+    get hasTestLinks() { return this.testResult && this.testResult.studyLinks && this.testResult.studyLinks.length > 0; }
+
+    /** Study links for display: stable keys, a "Cert · Type" line, and (in My progress) when it was last suggested. */
+    mapLinks(links, fmt) {
+        return (links || []).map((l, i) => ({
+            ...l,
+            key: 'l' + i,
+            meta: [l.certName, l.linkType].filter((x) => x).join(' · '),
+            lastText: fmt && l.lastSuggested ? 'Last suggested ' + fmt.format(new Date(l.lastSuggested)) : ''
+        }));
+    }
+
     get hasWeakAreas() { return this.history && this.history.weakAreas.length > 0; }
     get hasHistorySessions() { return this.history && this.history.sessions.length > 0; }
 
@@ -923,7 +969,8 @@ export default class CertStudy extends LightningElement {
                     ...s,
                     sessionActive: false,
                     missed: (s.missed || []).map((m, i) => ({ ...m, key: 'm' + i, feedbackBlocks: this.splitBlocks(m.feedback) })),
-                    areas: (s.areas || []).map((a, i) => ({ ...a, key: 'a' + i, barStyle: `width:${a.pct}%` }))
+                    areas: (s.areas || []).map((a, i) => ({ ...a, key: 'a' + i, barStyle: `width:${a.pct}%` })),
+                studyLinks: this.mapLinks(s.studyLinks)
                 };
                 this.fromHistory = true;
                 this.view = 'summary';
@@ -938,6 +985,110 @@ export default class CertStudy extends LightningElement {
     backToHistory() { this.showHistory(); }
 
     // ---------------------------------------------------------- keyboard
+
+    // ------------------------------------------- contributions / suggestions
+
+    contribKind = 'Study resource';
+    contribCert = '';
+    contribTitle = '';
+    contribUrl = '';
+    contribDetails = '';
+    contribError;
+    contribSending = false;
+    contribSent = false;
+    contribReturnView = 'select';
+
+    get contribKindOptions() {
+        return [
+            { label: 'A study resource for a cert', value: 'Study resource' },
+            { label: 'A suggestion for the app', value: 'Suggestion' }
+        ];
+    }
+    get contribIsResource() { return this.contribKind === 'Study resource'; }
+    get contribHeading() { return this.contribIsResource ? 'Share a study resource' : 'Suggest an improvement'; }
+    get contribHelp() {
+        return this.contribIsResource
+            ? 'Know a great guide, trail, or set of notes? Share a link or paste text. An admin reviews it before it is used to write new questions.'
+            : 'Tell us what would make Cert Study better: features, wording, anything that got in your way.';
+    }
+    get contribCertOptions() {
+        return this.allCerts
+            .filter((c) => !c.isAggregate)
+            .map((c) => ({ label: c.name, value: c.code }));
+    }
+
+    async openContribute(event) {
+        const kind = event.currentTarget.dataset.kind || 'Study resource';
+        this.contribReturnView = this.view;
+        if (!this.allCerts.length) {
+            try { this.allCerts = await listCerts(); } catch (e) { /* the cert list is optional for suggestions */ }
+        }
+        this.resetContributeForm();
+        this.contribKind = kind;
+        this.contribCert = this.defaultContribCert();
+        this.view = 'contribute';
+    }
+
+    defaultContribCert() {
+        const usable = this.allCerts.filter((c) => !c.isAggregate);
+        const fromSession = this.session && this.session.certs ? this.session.certs.find((c) => !c.isAggregate) : null;
+        if (fromSession) {
+            const match = usable.find((c) => c.name === fromSession.name);
+            if (match) return match.code;
+        }
+        const picked = this.selectedCodes && this.selectedCodes[0];
+        return picked && usable.some((c) => c.code === picked) ? picked : '';
+    }
+
+    resetContributeForm() {
+        this.contribTitle = '';
+        this.contribUrl = '';
+        this.contribDetails = '';
+        this.contribError = undefined;
+        this.contribSending = false;
+        this.contribSent = false;
+    }
+
+    closeContribute() {
+        this.resetContributeForm();
+        const back = this.contribReturnView;
+        if (back === 'select' || !back) this.showSelect();
+        else this.view = back;
+    }
+
+    changeContribKind(event) { this.contribKind = event.detail.value; this.contribError = undefined; }
+    changeContribCert(event) { this.contribCert = event.detail.value; }
+    changeContribTitle(event) { this.contribTitle = event.target.value; }
+    changeContribUrl(event) { this.contribUrl = event.target.value; }
+    changeContribDetails(event) { this.contribDetails = event.target.value; }
+
+    async sendContribution() {
+        this.contribError = undefined;
+        const details = (this.contribDetails || '').trim();
+        const url = (this.contribUrl || '').trim();
+        if (this.contribIsResource) {
+            if (!this.contribCert) { this.contribError = 'Pick the certification this resource is for.'; return; }
+            if (!url && !details) { this.contribError = 'Add a link, some text, or both.'; return; }
+        } else if (!details) {
+            this.contribError = 'Please describe your suggestion.';
+            return;
+        }
+        this.contribSending = true;
+        try {
+            await submitContribution({
+                kind: this.contribKind,
+                certCode: this.contribIsResource ? this.contribCert : null,
+                title: this.contribTitle,
+                url: this.contribIsResource ? url : null,
+                details
+            });
+            this.contribSent = true;
+        } catch (e) {
+            this.contribError = (e && e.body && e.body.message) || 'Could not send it. Please try again.';
+        } finally {
+            this.contribSending = false;
+        }
+    }
 
     // -------------------------------------------------- report a problem
 

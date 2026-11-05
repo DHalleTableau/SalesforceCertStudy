@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<LightningComponentBundle xmlns="http://soap.sforce.com/2006/04/metadata">
+    <apiVersion>64.0</apiVersion>
+    <isExposed>true</isExposed>
+    <masterLabel>Cert Study Welcome (sign-up panel)</masterLabel>
+    <description>Guest-safe welcome panel for the Login page with a big Create your account button.</description>
+    <targets>
+        <target>lightningCommunity__Page</target>
+        <target>lightningCommunity__Default</target>
+    </targets>
+    <targetConfigs>
+        <targetConfig targets="lightningCommunity__Default">
+            <property name="signUpUrl" type="String" label="Sign-up URL" description="Paste the URL the login page's Sign Up link goes to." default="" />
+            <property name="heading" type="String" label="Heading" default="Salesforce Cert Study" />
+            <property name="tagline" type="String" label="Tagline" default="Practice questions and mock exams for Salesforce certifications, with explanations." />
+        </targetConfig>
+    </targetConfigs>
+</LightningComponentBundle>

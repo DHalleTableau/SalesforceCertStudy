@@ -144,6 +144,78 @@ private class CertStudyControllerTest {
     }
 
     @IsTest
+    static void contributionsAreValidatedAndApprovedResourcesBecomeCertResources() {
+        // Validation
+        List<List<String>> bad = new List<List<String>>{
+            new List<String>{ 'Bogus', 'AI-201', 't', 'https://x.example', 'd' },
+            new List<String>{ 'Study resource', null, 't', 'https://x.example', null },
+            new List<String>{ 'Study resource', 'NOPE-999', 't', 'https://x.example', null },
+            new List<String>{ 'Study resource', 'AI-201', 't', null, null },
+            new List<String>{ 'Study resource', 'AI-201', 't', 'javascript:alert(1)', null },
+            new List<String>{ 'Suggestion', null, 'idea', null, '  ' }
+        };
+        for (List<String> b : bad) {
+            try {
+                CertStudyController.submitContribution(b[0], b[1], b[2], b[3], b[4]);
+                Assert.fail('expected an error for ' + b);
+            } catch (AuraHandledException e) {
+                Assert.isNotNull(e.getMessage());
+            }
+        }
+        Assert.areEqual(0, [SELECT COUNT() FROM Contribution__c]);
+
+        CertStudyController.submitContribution('Study resource', 'AI-201', 'Exam guide notes', 'https://example.com/guide', 'Key points...');
+        CertStudyController.submitContribution('Suggestion', null, null, null, 'Add a dark mode');
+        Assert.areEqual(2, [SELECT COUNT() FROM Contribution__c WHERE Status__c = 'New' AND Submitter__c = :UserInfo.getUserId()]);
+
+        Integer before = [SELECT COUNT() FROM Cert_Resource__c];
+        Contribution__c res = [SELECT Id FROM Contribution__c WHERE Kind__c = 'Study resource'];
+        update new Contribution__c(Id = res.Id, Status__c = 'Approved');
+        res = [SELECT Cert_Resource__c FROM Contribution__c WHERE Id = :res.Id];
+        Assert.isNotNull(res.Cert_Resource__c, 'approval creates a Cert Resource');
+        Cert_Resource__c cr = [SELECT Role__c, URL__c, Content__c, Cert__r.Cert_Code__c FROM Cert_Resource__c WHERE Id = :res.Cert_Resource__c];
+        Assert.areEqual('Additional', cr.Role__c);
+        Assert.areEqual('AI-201', cr.Cert__r.Cert_Code__c);
+        Assert.isTrue(cr.Content__c.startsWith('Exam guide notes'));
+
+        // Re-saving an approved row does not create a second resource; suggestions never do.
+        update new Contribution__c(Id = res.Id, Reviewer_Notes__c = 'ok');
+        Contribution__c sug = [SELECT Id FROM Contribution__c WHERE Kind__c = 'Suggestion'];
+        update new Contribution__c(Id = sug.Id, Status__c = 'Approved');
+        Assert.areEqual(before + 1, [SELECT COUNT() FROM Cert_Resource__c]);
+    }
+
+    @IsTest
+    static void studyLinksShowAtSessionEndAndBuildADedupedRunningList() {
+        Cert__c ai = [SELECT Id FROM Cert__c WHERE Cert_Code__c = 'AI-201'];
+        insert new List<Study_Link__c>{
+            new Study_Link__c(Cert__c = ai.Id, Title__c = 'Prep trailmix', URL__c = 'https://trailhead.example/mix', Sort_Order__c = 1, Link_Type__c = 'Trailmix'),
+            new Study_Link__c(Cert__c = ai.Id, Title__c = 'Prompting module', URL__c = 'https://trailhead.example/prompt', Sort_Order__c = 2, Domain__c = 'Prompting', Link_Type__c = 'Module'),
+            new Study_Link__c(Cert__c = ai.Id, Title__c = 'Old link', URL__c = 'https://trailhead.example/old', Sort_Order__c = 0, Active__c = false)
+        };
+
+        // Ordering: a weak-section link jumps the queue; inactive links never show.
+        List<Study_Link__c> picked = CertStudyService.studyLinksFor(new Set<Id>{ ai.Id }, new Set<String>{ 'prompting ' });
+        Assert.areEqual(2, picked.size());
+        Assert.areEqual('Prompting module', picked[0].Title__c);
+        Assert.areEqual('Prep trailmix', CertStudyService.studyLinksFor(new Set<Id>{ ai.Id }, null)[0].Title__c);
+
+        CertStudyLlm.instance = new NoopLlm();
+        CertStudyController.startPractice(new List<String>{ 'AI-201' }, '{"AI-201": false}');
+        CertStudyController.submitAnswer(new List<String>{ 'b' });
+        CertStudyController.SummaryView s = CertStudyController.getSummary(true);
+        Assert.areEqual(2, s.studyLinks.size(), 'practice summary shows the cert\'s links');
+        Assert.areEqual(2, [SELECT COUNT() FROM User_Study_Link__c WHERE User__c = :UserInfo.getUserId()]);
+
+        // Seeing them again (re-opening the summary) does not duplicate the running list.
+        CertStudyController.getSummary(false);
+        Assert.areEqual(2, [SELECT COUNT() FROM User_Study_Link__c]);
+        CertStudyController.HistoryView h = CertStudyController.getHistory();
+        Assert.areEqual(2, h.suggestedLinks.size());
+        Assert.isNotNull(h.suggestedLinks[0].firstSuggested);
+    }
+
+    @IsTest
     static void fullPracticeFlow() {
         CertStudyLlm.instance = new NoopLlm();
         List<CertStudyController.CertOption> certs = CertStudyController.listCerts();
@@ -349,53 +421,82 @@ private class CertStudyControllerTest {
         Assert.isFalse(CertStudyGenerator.applyOverview(rawMany, tooMany), 'objective lists are rejected');
     }
 
-    @IsTest
-    static void historyAcrossSessions() {
-        CertStudyLlm.instance = new NoopLlm();
-        Assert.areEqual(0, CertStudyController.getHistory().sessionsCount);
+    // History is checked across three tests: each session start/finish now also picks
+    // Trailhead study links, so one transaction holding everything goes past 100 SOQL queries.
+    // (In the app each click is its own transaction.)
 
+    private static void practiceTwoAnswers() {
         CertStudyController.startPractice(new List<String>{ 'AI-201' }, '{"AI-201": false}');
         CertStudyController.submitAnswer(new List<String>{ 'B' });
         CertStudyController.nextQuestion();
         CertStudyController.submitAnswer(new List<String>{ 'A' });
         CertStudyController.getSummary(true);
+    }
 
+    private static void failedShortTest() {
         shortExam(3, 105);
         CertStudyController.startTest('AI-201', false);
         CertStudyController.submitTestAnswer(new List<String>{ 'B' });
         CertStudyController.finishTest();
+    }
 
-        // The setup above is many requests in one test transaction; give the
-        // history checks their own governor limits (each real click is its own transaction).
+    private static CertStudyController.HistorySession findRow(CertStudyController.HistoryView h, Boolean isTest) {
+        for (CertStudyController.HistorySession hs : h.sessions) {
+            if (hs.isTest == isTest) return hs;
+        }
+        return null;
+    }
+
+    @IsTest
+    static void historyAcrossSessions() {
+        CertStudyLlm.instance = new NoopLlm();
+        Assert.areEqual(0, CertStudyController.getHistory().sessionsCount);
+        practiceTwoAnswers();
+
         Test.startTest();
+        failedShortTest();
         CertStudyController.HistoryView h = CertStudyController.getHistory();
+        Test.stopTest();
+
         Assert.areEqual(2, h.sessionsCount);
         Assert.areEqual(3, h.totalAnswered);
         Assert.areEqual(2, h.totalCorrect);
         Assert.areEqual(1, h.testsTaken);
         Assert.areEqual(0, h.testsPassed);
         Assert.isFalse(h.weakAreas.isEmpty(), 'areas with 2+ answers are ranked');
-
-        CertStudyController.HistorySession testRow;
-        CertStudyController.HistorySession practiceRow;
-        for (CertStudyController.HistorySession hs : h.sessions) {
-            if (hs.isTest) testRow = hs;
-            else practiceRow = hs;
-        }
+        CertStudyController.HistorySession testRow = findRow(h, true);
         Assert.areEqual(33, testRow.officialPct);
         Assert.isTrue(testRow.completed);
-        Assert.areEqual(50, practiceRow.pct);
-        Assert.isNotNull(CertStudyController.getSessionDetail(testRow.id).test);
-        Assert.isNotNull(CertStudyController.getSessionDetail(practiceRow.id).practice);
+        Assert.areEqual(50, findRow(h, false).pct);
+    }
 
+    @IsTest
+    static void historyReopensPracticeOnlyForOwner() {
+        CertStudyLlm.instance = new NoopLlm();
+        practiceTwoAnswers();
         User other = makeUser('3');
         System.runAs(new User(Id = UserInfo.getUserId())) {
             insert other;
         }
+
+        Test.startTest();
+        CertStudyController.HistorySession practiceRow = findRow(CertStudyController.getHistory(), false);
+        Assert.isNotNull(CertStudyController.getSessionDetail(practiceRow.id).practice);
         System.runAs(other) {
             Assert.isNotNull(CertStudyController.getSessionDetail(practiceRow.id).error, 'cannot open someone else\'s session');
             Assert.areEqual(0, CertStudyController.getHistory().sessionsCount);
         }
+        Test.stopTest();
+    }
+
+    @IsTest
+    static void historyReopensTestResult() {
+        CertStudyLlm.instance = new NoopLlm();
+        failedShortTest();
+
+        Test.startTest();
+        CertStudyController.HistorySession testRow = findRow(CertStudyController.getHistory(), true);
+        Assert.isNotNull(CertStudyController.getSessionDetail(testRow.id).test);
         Test.stopTest();
     }
 

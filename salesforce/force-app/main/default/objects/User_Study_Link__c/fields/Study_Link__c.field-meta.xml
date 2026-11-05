@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>Study_Link__c</fullName>
+    <label>Study Link</label>
+    <referenceTo>Study_Link__c</referenceTo>
+    <relationshipLabel>Suggestions</relationshipLabel>
+    <relationshipName>Suggestions</relationshipName>
+    <deleteConstraint>SetNull</deleteConstraint>
+    <required>false</required>
+    <type>Lookup</type>
+</CustomField>

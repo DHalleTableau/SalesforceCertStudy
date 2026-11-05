@@ -115,6 +115,35 @@
     border-radius: 999px;
 }
 
+.brand-chip_link {
+    color: #fff;
+    background: rgba(255, 255, 255, 0.15);
+    cursor: pointer;
+}
+
+.brand-chip_link:hover,
+.brand-chip_link:focus {
+    background: rgba(255, 255, 255, 0.3);
+}
+
+.release {
+    margin-bottom: 0.875rem;
+    padding-bottom: 0.625rem;
+    border-bottom: 1px solid #e5e5e5;
+}
+
+.release-head {
+    display: flex;
+    align-items: baseline;
+    gap: 0.5rem;
+    margin-bottom: 0.25rem;
+}
+
+.release-version {
+    font-weight: 700;
+    color: #032d60;
+}
+
 .brand-footer {
     margin-top: 0.75rem;
     padding: 0.625rem 1rem;
@@ -152,6 +181,12 @@
 
 .cert-line lightning-input {
     flex: 0 1 auto;
+}
+
+.contrib-strip {
+    margin-top: 0.75rem;
+    padding-top: 0.5rem;
+    border-top: 1px solid #e5e5e5;
 }
 
 .report-box {
@@ -247,4 +282,14 @@
 
 .history-row {
     border-bottom: 1px solid #e5e5e5;
+}
+
+.study-links {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+}
+
+.study-links a {
+    font-weight: 600;
 }

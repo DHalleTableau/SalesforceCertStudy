@@ -79,6 +79,7 @@ public with sharing class CertStudyController {
         @AuraEnabled public List<DomainView> domains = new List<DomainView>();
         @AuraEnabled public List<String> recommendations = new List<String>();
         @AuraEnabled public List<MissedView> missed = new List<MissedView>();
+        @AuraEnabled public List<StudyLinkView> studyLinks = new List<StudyLinkView>();
     }
 
     public class SessionView {
@@ -128,7 +129,17 @@ public with sharing class CertStudyController {
         @AuraEnabled public String feedback;
     }
 
+    public class StudyLinkView {
+        @AuraEnabled public String title;
+        @AuraEnabled public String url;
+        @AuraEnabled public String linkType;
+        @AuraEnabled public String certName;
+        @AuraEnabled public DateTime firstSuggested;
+        @AuraEnabled public DateTime lastSuggested;
+    }
+
     public class SummaryView {
+        @AuraEnabled public List<StudyLinkView> studyLinks = new List<StudyLinkView>();
         @AuraEnabled public String error;
         @AuraEnabled public Boolean hasSession = false;
         @AuraEnabled public Boolean sessionActive = false;
@@ -170,6 +181,7 @@ public with sharing class CertStudyController {
         @AuraEnabled public Integer testsPassed = 0;
         @AuraEnabled public List<HistoryArea> weakAreas = new List<HistoryArea>();
         @AuraEnabled public List<HistorySession> sessions = new List<HistorySession>();
+        @AuraEnabled public List<StudyLinkView> suggestedLinks = new List<StudyLinkView>(); // every link ever shown, newest first
     }
 
     public class DetailView {
@@ -230,6 +242,16 @@ public with sharing class CertStudyController {
     public static void reportQuestion(String questionId, String issueType, String comment) {
         try {
             CertStudyService.reportQuestion(UserInfo.getUserId(), questionId, issueType, comment);
+        } catch (Exception e) {
+            throw wrap(e);
+        }
+    }
+
+    /** Send a study resource or a suggestion for admin review. */
+    @AuraEnabled
+    public static void submitContribution(String kind, String certCode, String title, String url, String details) {
+        try {
+            CertStudyService.submitContribution(UserInfo.getUserId(), kind, certCode, title, url, details);
         } catch (Exception e) {
             throw wrap(e);
         }
@@ -369,8 +391,37 @@ public with sharing class CertStudyController {
                 m.feedback = a.Question__r.Feedback_MD__c;
                 v.missed.add(m);
             }
+            Set<String> weak = new Set<String>();
+            for (CertStudyService.AreaStat st : d.areas) {
+                if (st.total > 0 && st.pct() < WEAK_SECTION_PCT && !String.isBlank(st.domain)) weak.add(st.domain);
+            }
+            v.studyLinks = suggestLinks(CertStudyService.certIdsForSession(d.session), weak);
             return v;
         }
+    }
+
+    /** Below this score an exam section counts as weak, so its tagged study links come first. */
+    private static final Integer WEAK_SECTION_PCT = 70;
+
+    /** Picks study links for the session's certs and remembers them in the learner's running list. */
+    private static List<StudyLinkView> suggestLinks(Set<Id> certIds, Set<String> weakSections) {
+        List<StudyLinkView> out = new List<StudyLinkView>();
+        try {
+            List<Study_Link__c> links = CertStudyService.studyLinksFor(certIds, weakSections);
+            CertStudyService.recordSuggestedLinks(UserInfo.getUserId(), links);
+            for (Study_Link__c l : links) {
+                StudyLinkView sv = new StudyLinkView();
+                sv.title = l.Title__c;
+                sv.url = l.URL__c;
+                sv.linkType = l.Link_Type__c;
+                sv.certName = l.Cert__r == null ? null : l.Cert__r.Name;
+                out.add(sv);
+            }
+        } catch (Exception e) {
+            // Study links are a nice-to-have; never let them break the results screen.
+            System.debug(LoggingLevel.WARN, 'Study links skipped: ' + e.getMessage());
+        }
+        return out;
     }
 
     // --------------------------------------------------------------- history
@@ -481,6 +532,16 @@ public with sharing class CertStudyController {
             for (String k : keys) {
                 if (h.weakAreas.size() >= WEAK_AREAS_SHOWN) break;
                 h.weakAreas.add(sorted.get(k));
+            }
+            for (User_Study_Link__c u : CertStudyService.suggestedLinksFor(UserInfo.getUserId())) {
+                StudyLinkView sv = new StudyLinkView();
+                sv.title = u.Study_Link__r.Title__c;
+                sv.url = u.Study_Link__r.URL__c;
+                sv.linkType = u.Study_Link__r.Link_Type__c;
+                sv.certName = u.Study_Link__r.Cert__r == null ? null : u.Study_Link__r.Cert__r.Name;
+                sv.firstSuggested = u.First_Suggested_At__c;
+                sv.lastSuggested = u.Last_Suggested_At__c;
+                h.suggestedLinks.add(sv);
             }
             return h;
         } catch (Exception e) {
@@ -724,6 +785,11 @@ public with sharing class CertStudyController {
             m.feedback = a.Question__r.Feedback_MD__c;
             t.missed.add(m);
         }
+        Set<String> weak = new Set<String>();
+        for (DomainView dv : t.domains) if (dv.answered > 0 && dv.likelyPass != true) weak.add(dv.name);
+        Set<Id> certIds = new Set<Id>();
+        if (r.cert != null && r.cert.Id != null) certIds.add(r.cert.Id);
+        t.studyLinks = suggestLinks(certIds, weak);
         return t;
     }
 

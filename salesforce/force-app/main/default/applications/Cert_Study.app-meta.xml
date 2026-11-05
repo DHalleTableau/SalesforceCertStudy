@@ -8,5 +8,7 @@
     <navType>Standard</navType>
     <tabs>Cert_Study</tabs>
     <tabs>Question_Report__c</tabs>
+    <tabs>Contribution__c</tabs>
+    <tabs>Study_Link__c</tabs>
     <uiType>Lightning</uiType>
 </CustomApplication>

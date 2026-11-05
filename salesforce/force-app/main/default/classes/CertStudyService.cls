@@ -157,6 +157,157 @@ public without sharing class CertStudyService {
         update new Question_Report__c(Id = r.Id, Comment__c = combined);
     }
 
+    // -------------------------------------------------------- study links
+
+    public static final Integer STUDY_LINKS_PER_CERT = 3;
+    public static final Integer STUDY_LINKS_MAX = 6;
+
+    /**
+     * Active study links for the given certs, up to STUDY_LINKS_PER_CERT each. Links tagged with an exam
+     * section the learner scored low on come first; then by Sort Order.
+     */
+    public static List<Study_Link__c> studyLinksFor(Set<Id> certIds, Set<String> weakSections) {
+        List<Study_Link__c> out = new List<Study_Link__c>();
+        if (certIds == null || certIds.isEmpty()) return out;
+        Set<String> weak = new Set<String>();
+        if (weakSections != null) for (String w : weakSections) if (w != null) weak.add(w.trim().toLowerCase());
+        Map<Id, List<Study_Link__c>> byCert = new Map<Id, List<Study_Link__c>>();
+        for (Study_Link__c l : [
+            SELECT Id, Cert__c, Cert__r.Name, Title__c, URL__c, Link_Type__c, Domain__c, Sort_Order__c
+            FROM Study_Link__c
+            WHERE Cert__c IN :certIds AND Active__c = true AND URL__c != null
+            ORDER BY Cert__r.Name, Sort_Order__c NULLS LAST, Title__c
+        ]) {
+            if (!byCert.containsKey(l.Cert__c)) byCert.put(l.Cert__c, new List<Study_Link__c>());
+            byCert.get(l.Cert__c).add(l);
+        }
+        for (List<Study_Link__c> links : byCert.values()) {
+            List<Study_Link__c> first = new List<Study_Link__c>();
+            List<Study_Link__c> rest = new List<Study_Link__c>();
+            for (Study_Link__c l : links) {
+                Boolean hit = l.Domain__c != null && weak.contains(l.Domain__c.trim().toLowerCase());
+                if (hit) first.add(l);
+                else rest.add(l);
+            }
+            first.addAll(rest);
+            for (Integer i = 0; i < first.size() && i < STUDY_LINKS_PER_CERT && out.size() < STUDY_LINKS_MAX; i++) {
+                out.add(first[i]);
+            }
+        }
+        return out;
+    }
+
+    /** Remember which links a learner was shown: one row per learner + link (re-showing updates Last Suggested). */
+    public static void recordSuggestedLinks(Id userId, List<Study_Link__c> links) {
+        if (userId == null || links == null || links.isEmpty()) return;
+        Map<String, Id> keyToLink = new Map<String, Id>();
+        for (Study_Link__c l : links) keyToLink.put(String.valueOf(userId) + ':' + String.valueOf(l.Id), l.Id);
+        Set<String> existing = new Set<String>();
+        for (User_Study_Link__c u : [SELECT Unique_Key__c FROM User_Study_Link__c WHERE Unique_Key__c IN :keyToLink.keySet()]) {
+            existing.add(u.Unique_Key__c);
+        }
+        DateTime now = DateTime.now();
+        List<User_Study_Link__c> rows = new List<User_Study_Link__c>();
+        for (String k : keyToLink.keySet()) {
+            User_Study_Link__c u = new User_Study_Link__c(Unique_Key__c = k, Last_Suggested_At__c = now);
+            if (!existing.contains(k)) {
+                u.User__c = userId;
+                u.Study_Link__c = keyToLink.get(k);
+                u.First_Suggested_At__c = now;
+            }
+            rows.add(u);
+        }
+        upsert rows User_Study_Link__c.Unique_Key__c;
+    }
+
+    /** Every link this learner has been shown, most recent first (deduplicated by construction). */
+    public static List<User_Study_Link__c> suggestedLinksFor(Id userId) {
+        return [
+            SELECT Study_Link__r.Title__c, Study_Link__r.URL__c, Study_Link__r.Link_Type__c, Study_Link__r.Cert__r.Name,
+                First_Suggested_At__c, Last_Suggested_At__c
+            FROM User_Study_Link__c
+            WHERE User__c = :userId AND Study_Link__c != null AND Study_Link__r.URL__c != null
+            ORDER BY Last_Suggested_At__c DESC
+            LIMIT 200
+        ];
+    }
+
+    /** Cert Ids for a session's codes (aggregates included; they simply have no links of their own). */
+    public static Set<Id> certIdsForSession(Study_Session__c s) {
+        Set<String> codes = sessionCodes(s);
+        Set<Id> ids = new Set<Id>();
+        for (Cert__c c : [SELECT Id FROM Cert__c WHERE Cert_Code__c IN :codes]) ids.add(c.Id);
+        return ids;
+    }
+
+    // ------------------------------------------------------ contributions
+
+    public static final String KIND_RESOURCE = 'Study resource';
+    public static final String KIND_SUGGESTION = 'Suggestion';
+    public static final Integer MAX_CONTRIBUTIONS_PER_HOUR = 10;
+    public static final Integer MAX_CONTRIBUTION_DETAILS = 20000;
+
+    /**
+     * Save a learner's study resource (link and/or text for a cert) or a suggestion for the app.
+     * Nothing reaches the question generator until an admin approves it.
+     */
+    public static void submitContribution(Id userId, String kind, String certCode, String title, String url, String details) {
+        if (kind != KIND_RESOURCE && kind != KIND_SUGGESTION) throw new ServiceException('Choose what you are sending.');
+        String t = String.isBlank(title) ? null : title.trim().abbreviate(150);
+        String u = String.isBlank(url) ? null : url.trim();
+        String d = String.isBlank(details) ? null : details.trim();
+        if (d != null && d.length() > MAX_CONTRIBUTION_DETAILS) {
+            throw new ServiceException('Please keep the text under ' + MAX_CONTRIBUTION_DETAILS + ' characters.');
+        }
+        if (u != null) {
+            if (!Pattern.matches('(?i)https?://[^\\s]+', u) || u.length() > 255) {
+                throw new ServiceException('The link must start with http:// or https:// and have no spaces.');
+            }
+        }
+        Id certId;
+        if (kind == KIND_RESOURCE) {
+            if (String.isBlank(certCode)) throw new ServiceException('Pick the certification this resource is for.');
+            List<Cert__c> certs = [SELECT Id FROM Cert__c WHERE Cert_Code__c = :certCode LIMIT 1];
+            if (certs.isEmpty()) throw new ServiceException('That certification was not found.');
+            certId = certs[0].Id;
+            if (u == null && d == null) throw new ServiceException('Add a link, some text, or both.');
+        } else if (d == null) {
+            throw new ServiceException('Please describe your suggestion.');
+        }
+        DateTime since = DateTime.now().addHours(-1);
+        if ([SELECT COUNT() FROM Contribution__c WHERE Submitter__c = :userId AND Submitted_At__c >= :since] >= MAX_CONTRIBUTIONS_PER_HOUR) {
+            throw new ServiceException('You have sent a lot in the last hour. Please try again later.');
+        }
+        insert new Contribution__c(
+            Kind__c = kind, Cert__c = certId, Title__c = t, URL__c = u, Details__c = d,
+            Submitter__c = userId, Status__c = 'New', Submitted_At__c = DateTime.now()
+        );
+    }
+
+    /** Trigger hook: approved study resources become Additional Cert Resources (once each). */
+    public static void onContributionsApproved(List<Contribution__c> rows, Map<Id, Contribution__c> oldMap) {
+        List<Contribution__c> toConvert = new List<Contribution__c>();
+        for (Contribution__c c : rows) {
+            Contribution__c old = oldMap.get(c.Id);
+            Boolean nowApproved = c.Status__c == 'Approved' && (old == null || old.Status__c != 'Approved');
+            if (!nowApproved || c.Kind__c != KIND_RESOURCE || c.Cert_Resource__c != null) continue;
+            if (c.Cert__c == null) {
+                c.addError('Pick a Certification before approving a study resource.');
+                continue;
+            }
+            toConvert.add(c);
+        }
+        if (toConvert.isEmpty()) return;
+        List<Cert_Resource__c> created = new List<Cert_Resource__c>();
+        for (Contribution__c c : toConvert) {
+            String content = c.Details__c;
+            if (!String.isBlank(c.Title__c)) content = c.Title__c + (String.isBlank(content) ? '' : '\n\n' + content);
+            created.add(new Cert_Resource__c(Cert__c = c.Cert__c, Role__c = 'Additional', URL__c = c.URL__c, Content__c = content));
+        }
+        insert created;
+        for (Integer i = 0; i < toConvert.size(); i++) toConvert[i].Cert_Resource__c = created[i].Id;
+    }
+
     /** Direct prerequisite names per cert Id, for the picker. */
     public static Map<Id, List<String>> prereqNamesByCert() {
         Map<Id, List<String>> out = new Map<Id, List<String>>();

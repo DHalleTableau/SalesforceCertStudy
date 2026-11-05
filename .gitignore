@@ -14,3 +14,4 @@ salesforce/backups/
 salesforce/restore/
 salesforce/.sf/
 salesforce/.sfdx/
+salesforce/data/contributions/

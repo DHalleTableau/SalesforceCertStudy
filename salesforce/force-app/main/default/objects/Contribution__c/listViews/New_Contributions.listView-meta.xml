@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ListView xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>New_Contributions</fullName>
+    <columns>NAME</columns>
+    <columns>Kind__c</columns>
+    <columns>Title__c</columns>
+    <columns>Cert__c</columns>
+    <columns>URL__c</columns>
+    <columns>Status__c</columns>
+    <columns>Submitted_At__c</columns>
+    <columns>Submitter__c</columns>
+    <filterScope>Everything</filterScope>
+    <filters>
+        <field>Status__c</field>
+        <operation>equals</operation>
+        <value>New</value>
+    </filters>
+    <label>New Contributions</label>
+</ListView>
