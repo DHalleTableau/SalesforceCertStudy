@@ -123,7 +123,7 @@
                         <lightning-button variant="base" label={upcomingSelectLabel} onclick={selectUpcoming}
                             class="slds-m-right_small"></lightning-button>
                     </template>
-                    <lightning-button variant="base" label="Manage upcoming exams" onclick={showGoals}></lightning-button>
+                    <lightning-button variant="base" label="My exams" onclick={showGoals}></lightning-button>
                 </div>
                 <template lwc:if={hasLastSelection}>
                     <div class="slds-m-bottom_x-small">
@@ -575,7 +575,7 @@
 
             <!-- my upcoming exams -->
             <template lwc:if={isGoals}>
-                <p class="slds-text-heading_medium slds-m-bottom_x-small">My upcoming exams</p>
+                <p class="slds-text-heading_medium slds-m-bottom_x-small">My exams</p>
                 <p class="slds-text-color_weak slds-m-bottom_small">
                     Add the exams you are studying for, with an optional date. On the picker, "Select upcoming exams"
                     picks them for you. After the date we will ask whether you passed.
@@ -621,6 +621,64 @@
                             disabled={cannotAddGoal}></lightning-button>
                     </div>
                 </div>
+                <lightning-input type="checkbox" label="Show completed exams" checked={showCompleted}
+                    onchange={handleShowCompleted} class="slds-m-bottom_x-small"></lightning-input>
+                <template lwc:if={showCompleted}>
+                    <p class="slds-text-heading_small slds-m-top_small slds-m-bottom_x-small">Add a past attempt</p>
+                    <div class="slds-grid slds-wrap slds-gutters_x-small slds-grid_vertical-align-end slds-m-bottom_small">
+                        <div class="slds-col slds-size_1-of-1 slds-medium-size_5-of-12">
+                            <lightning-combobox name="pastCert" label="Exam" value={pastCertCode}
+                                options={pastCertOptions} placeholder="Choose a certification"
+                                onchange={handlePastCert}></lightning-combobox>
+                        </div>
+                        <div class="slds-col slds-size_1-of-1 slds-medium-size_3-of-12">
+                            <lightning-input type="date" label="Date taken" value={pastDate}
+                                onchange={handlePastDate}></lightning-input>
+                        </div>
+                        <div class="slds-col slds-size_1-of-1 slds-medium-size_2-of-12">
+                            <lightning-combobox name="pastResult" label="Result" value={pastResult}
+                                options={pastResultOptions} onchange={handlePastResult}></lightning-combobox>
+                        </div>
+                        <div class="slds-col slds-size_1-of-1 slds-medium-size_2-of-12">
+                            <lightning-button variant="brand" label="Add attempt" onclick={addPast}
+                                disabled={cannotAddPast}></lightning-button>
+                        </div>
+                    </div>
+                </template>
+                <template lwc:if={showCompleted}>
+                    <template lwc:if={hasCompleted}>
+                        <div class="slds-box slds-box_x-small slds-m-bottom_small">
+                            <template for:each={completedRows} for:item="x">
+                                <div key={x.id} class="slds-grid slds-wrap slds-grid_vertical-align-center slds-p-vertical_xx-small">
+                                    <div class="slds-col slds-size_1-of-1 slds-medium-size_8-of-12">
+                                        <strong>{x.certName}</strong>
+                                        <div class="slds-text-color_weak slds-text-body_small">{x.summary}</div>
+                                    </div>
+                                    <div class="slds-col slds-size_1-of-1 slds-medium-size_4-of-12 slds-text-align_right">
+                                        <template lwc:if={x.notConfirming}>
+                                            <template lwc:if={x.canEditScores}>
+                                                <lightning-button variant="base" label={x.scoresLabel} data-id={x.id}
+                                                    onclick={editExamScores}></lightning-button>
+                                            </template>
+                                            <lightning-button variant="base" label="Delete" data-id={x.id}
+                                                onclick={askDeleteExam} class="slds-m-left_small"></lightning-button>
+                                        </template>
+                                        <template lwc:if={x.confirming}>
+                                            <span class="slds-m-right_x-small">Delete this record and its scores?</span>
+                                            <lightning-button variant="destructive" label="Yes, delete" data-id={x.id}
+                                                onclick={confirmDeleteExam}></lightning-button>
+                                            <lightning-button label="Cancel" onclick={cancelDeleteExam}
+                                                class="slds-m-left_x-small"></lightning-button>
+                                        </template>
+                                    </div>
+                                </div>
+                            </template>
+                        </div>
+                    </template>
+                    <template lwc:if={noCompleted}>
+                        <p class="slds-m-bottom_small">No completed exams yet.</p>
+                    </template>
+                </template>
                 <lightning-button label="Back" onclick={closeGoals}></lightning-button>
             </template>
 

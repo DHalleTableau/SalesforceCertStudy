@@ -699,6 +699,89 @@ private class CertStudyTest {
     }
 
     @IsTest
+    static void completedExamsStayReachableAndScoresCanBeEditedLater() {
+        examDomains();
+        Id uid = UserInfo.getUserId();
+        Id gid = failedGoal();
+        Assert.isTrue(CertStudyService.openGoals(uid).isEmpty(), 'a completed exam leaves the open list');
+
+        List<CertStudyService.ExamRow> hist = CertStudyService.examHistory(uid);
+        Assert.areEqual(1, hist.size());
+        Assert.areEqual('Not passed', hist[0].status);
+        Assert.isFalse(hist[0].hasScores);
+        Assert.isTrue(CertStudyService.savedScores(uid, String.valueOf(gid)).rows.isEmpty(), 'nothing saved yet');
+
+        CertStudyService.ScorePreview p = CertStudyService.previewScores(uid, String.valueOf(gid), EXAM_REPORT);
+        CertStudyService.saveScores(uid, String.valueOf(gid), p.rows);
+        Assert.isTrue(CertStudyService.examHistory(uid)[0].hasScores);
+
+        // Reopen, change one score, save again: the newest scores replace the old ones.
+        CertStudyService.ScorePreview saved = CertStudyService.savedScores(uid, String.valueOf(gid));
+        Assert.areEqual(6, saved.rows.size());
+        Assert.areEqual('Prompt Engineering', saved.rows[0].domain);
+        saved.rows[0].pct = 40;
+        CertStudyService.saveScores(uid, String.valueOf(gid), saved.rows);
+        Assert.areEqual(40, CertStudyService.savedScores(uid, String.valueOf(gid)).rows[0].pct);
+
+        // Deleting a completed record removes it for good; open exams and other learners' records are untouched.
+        try {
+            CertStudyService.deleteCompletedExam('005000000000001', String.valueOf(gid));
+            Assert.fail('not their exam');
+        } catch (CertStudyService.ServiceException e) {
+            Assert.isTrue(e.getMessage().contains('not found'));
+        }
+        Assert.isTrue(CertStudyService.deleteCompletedExam(uid, String.valueOf(gid)).isEmpty());
+        Assert.areEqual(0, [SELECT COUNT() FROM Study_Goal__c WHERE Id = :gid]);
+        failedGoal(); // a retake, so the rest of this test still has a not-passed record
+
+        // A passed exam shows in history but cannot carry scores.
+        CertStudyService.saveGoal(uid, 'AI-201', Date.today().addDays(-1));
+        Id passedId = CertStudyService.openGoals(uid)[0].id;
+        CertStudyService.recordOutcome(uid, String.valueOf(passedId), true);
+        Assert.areEqual(2, CertStudyService.examHistory(uid).size());
+        try {
+            CertStudyService.savedScores(uid, String.valueOf(passedId));
+            Assert.fail('only a not-passed exam has scores');
+        } catch (CertStudyService.ServiceException e) {
+            Assert.isTrue(e.getMessage().contains('not found'));
+        }
+    }
+
+    @IsTest
+    static void pastAttemptsCanBeAddedDirectly() {
+        examDomains();
+        Id uid = UserInfo.getUserId();
+        Id gid = CertStudyService.addPastExam(uid, 'AI-201', Date.today().addDays(-30), false);
+        Study_Goal__c g = [SELECT Status__c, Exam_Date__c, Outcome_Recorded_On__c FROM Study_Goal__c WHERE Id = :gid];
+        Assert.areEqual('Not passed', g.Status__c);
+        Assert.areEqual(Date.today().addDays(-30), g.Outcome_Recorded_On__c, 'attempts sort by when they happened');
+        Assert.isTrue(CertStudyService.openGoals(uid).isEmpty(), 'it is history, not an upcoming exam');
+        CertStudyService.ScorePreview p = CertStudyService.previewScores(uid, String.valueOf(gid), EXAM_REPORT);
+        CertStudyService.saveScores(uid, String.valueOf(gid), p.rows);
+        Assert.areEqual(1, CertStudyService.examFocusRows(uid).size(), 'its scores drive focus');
+
+        // A booked retake can sit in the upcoming list at the same time.
+        CertStudyService.saveGoal(uid, 'AI-201', Date.today().addDays(20));
+        Assert.areEqual(1, CertStudyService.openGoals(uid).size());
+        Assert.areEqual(1, CertStudyService.examFocusRows(uid).size());
+
+        try {
+            CertStudyService.addPastExam(uid, 'AI-201', Date.today().addDays(3), false);
+            Assert.fail('future date');
+        } catch (CertStudyService.ServiceException e) {
+            Assert.isTrue(e.getMessage().contains('future'));
+        }
+        try {
+            CertStudyService.addPastExam(uid, 'AGG-1', null, false);
+            Assert.fail('aggregate');
+        } catch (CertStudyService.ServiceException e) {
+            Assert.isNotNull(e.getMessage());
+        }
+        CertStudyService.addPastExam(uid, 'AI-201', null, true);
+        Assert.isTrue(CertStudyService.earnedCertCodes(uid).contains('AI-201'), 'a past pass marks the cert earned');
+    }
+
+    @IsTest
     static void examResultsReplaceHistoryWeightsUntilPassed() {
         examDomains();
         Id uid = UserInfo.getUserId();
@@ -746,12 +829,12 @@ private class CertStudyTest {
         Assert.areEqual('Answered', [SELECT Status__c FROM Question__c WHERE Id = :copy.Source_Question__c].Status__c,
             'the original stays with the first learner');
 
-        CertStudyService.gradeCore(s, new List<String>{ 'A' });
+        CertStudyService.gradeCore(s, new List<String>{ 'A' }, false);
         Question__c second = CertStudyService.nextQuestionRecord(s);
         Assert.isNotNull(second);
         Assert.areNotEqual(copy.Source_Question__c,
             [SELECT Source_Question__c FROM Question__c WHERE Id = :second.Id].Source_Question__c, 'a different original');
-        CertStudyService.gradeCore(s, new List<String>{ 'A' });
+        CertStudyService.gradeCore(s, new List<String>{ 'A' }, false);
         Assert.isNull(CertStudyService.nextQuestionRecord(s), 'both originals have now been seen');
     }
 

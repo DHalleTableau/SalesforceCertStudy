@@ -6,6 +6,10 @@ import nextQuestion from '@salesforce/apex/CertStudyController.nextQuestion';
 import retryGeneration from '@salesforce/apex/CertStudyController.retryGeneration';
 import getLastSelection from '@salesforce/apex/CertStudyController.getLastSelection';
 import getFocusableCerts from '@salesforce/apex/CertStudyController.getFocusableCerts';
+import addPastExam from '@salesforce/apex/CertStudyController.addPastExam';
+import deleteExam from '@salesforce/apex/CertStudyController.deleteExam';
+import getExamHistory from '@salesforce/apex/CertStudyController.getExamHistory';
+import getSavedSectionScores from '@salesforce/apex/CertStudyController.getSavedSectionScores';
 import getExamFocus from '@salesforce/apex/CertStudyController.getExamFocus';
 import previewSectionScores from '@salesforce/apex/CertStudyController.previewSectionScores';
 import saveSectionScores from '@salesforce/apex/CertStudyController.saveSectionScores';
@@ -36,7 +40,7 @@ const MAX_POLLS = 90; // ~6 minutes
 
 // Shown in the banner/footer. Bump APP_VERSION and APP_RELEASED on each release.
 const APP_VERSION = 'v0.14.0';
-const APP_RELEASED = 'Nov 2026'; // set the exact date when v0.14.0 is published
+const APP_RELEASED = 'Nov 13, 2026'; // set the exact date when v0.14.0 is published
 const OWNER_NAME = 'Daniel Halle';
 const OWNER_EMAIL = 'daniel.halle@salesforce.com';
 
@@ -379,6 +383,7 @@ export default class CertStudy extends LightningElement {
         if (!this.allCerts.length) {
             try { this.allCerts = await listCerts(); } catch (e) { /* options just stay empty */ }
         }
+        if (this.showCompleted) await this.loadExamHistory();
         this.view = 'goals';
     }
 
@@ -476,7 +481,10 @@ export default class CertStudy extends LightningElement {
         return [none, ...d.map((x) => ({ label: x, value: x }))];
     }
 
+    scoresFrom = 'picker';
+
     openScores(goalId, certName) {
+        this.scoresFrom = 'picker';
         this.scoresGoalId = goalId;
         this.scoresCertName = certName;
         this.scoresText = '';
@@ -533,7 +541,124 @@ export default class CertStudy extends LightningElement {
         }
     }
 
-    closeScores() { this.showSelect(); }
+    closeScores() {
+        if (this.scoresFrom === 'goals') this.showGoals();
+        else this.showSelect();
+    }
+
+    // Completed exams stay on file; they are only hidden from the list until the toggle is on.
+    showCompleted = false;
+    examHistory = [];
+
+    get completedRows() {
+        return this.examHistory.map((x) => {
+            const parts = [x.status];
+            if (x.outcomeLabel) parts.push(`recorded ${x.outcomeLabel}`);
+            if (x.examDateLabel) parts.push(`exam date ${x.examDateLabel}`);
+            return {
+                ...x,
+                summary: parts.join(' · '),
+                scoresLabel: x.hasScores ? 'View or update scores' : 'Add scores',
+                confirming: x.id === this.confirmDeleteId,
+                notConfirming: x.id !== this.confirmDeleteId
+            };
+        });
+    }
+    get hasCompleted() { return this.examHistory.length > 0; }
+    get noCompleted() { return this.showCompleted && this.examHistory.length === 0; }
+
+    async loadExamHistory() {
+        try {
+            this.examHistory = await getExamHistory();
+        } catch (e) {
+            this.examHistory = [];
+            this.goalError = this.messageOf(e);
+        }
+    }
+
+    async handleShowCompleted(event) {
+        this.showCompleted = event.target.checked;
+        if (this.showCompleted) await this.loadExamHistory();
+    }
+
+    // Add an attempt that already happened (for example an earlier failure).
+    pastCertCode = '';
+    pastDate = '';
+    pastResult = 'Not passed';
+
+    get pastResultOptions() {
+        return [
+            { label: 'Did not pass', value: 'Not passed' },
+            { label: 'Passed', value: 'Passed' }
+        ];
+    }
+    get pastCertOptions() {
+        return this.allCerts
+            .filter((c) => !c.isAggregate)
+            .sort((a, b) => a.name.localeCompare(b.name))
+            .map((c) => ({ label: c.name, value: c.code }));
+    }
+    get cannotAddPast() { return !this.pastCertCode || !this.pastDate || this.busy; }
+
+    handlePastCert(event) { this.pastCertCode = event.detail.value; }
+    handlePastDate(event) { this.pastDate = event.detail.value; }
+    handlePastResult(event) { this.pastResult = event.detail.value; }
+
+    async addPast() {
+        this.goalError = undefined;
+        this.busy = true;
+        try {
+            const passed = this.pastResult === 'Passed';
+            const id = await addPastExam({ certCode: this.pastCertCode, examDate: this.pastDate, passed });
+            this.pastCertCode = '';
+            this.pastDate = '';
+            this.showCompleted = true;
+            if (passed) this.earnedCodes = await getEarnedCerts();
+            await this.loadExamHistory();
+            // A failed attempt goes straight to its scores screen; Skip there returns to My exams.
+            if (!passed) await this.editExamScores({ target: { dataset: { id } } });
+        } catch (e) {
+            this.goalError = this.messageOf(e);
+        } finally {
+            this.busy = false;
+        }
+    }
+
+    confirmDeleteId; // the completed exam awaiting a Yes/Cancel
+
+    askDeleteExam(event) { this.confirmDeleteId = event.target.dataset.id; }
+    cancelDeleteExam() { this.confirmDeleteId = undefined; }
+
+    async confirmDeleteExam(event) {
+        this.goalError = undefined;
+        try {
+            this.examHistory = await deleteExam({ goalId: event.target.dataset.id });
+        } catch (e) {
+            this.goalError = this.messageOf(e);
+        } finally {
+            this.confirmDeleteId = undefined;
+        }
+    }
+
+    async editExamScores(event) {
+        const id = event.target.dataset.id;
+        const row = this.examHistory.find((x) => x.id === id);
+        this.goalError = undefined;
+        this.openScores(id, row ? row.certName : '');
+        this.scoresFrom = 'goals';
+        this.busy = true;
+        try {
+            const p = await getSavedSectionScores({ goalId: id });
+            if (p.rows && p.rows.length) {
+                this.scoresPreview = p;
+                this.scoresRows = p.rows.map((r, i) => ({ key: 'r' + i, name: r.name, pct: r.pct, domain: r.domain || '' }));
+            }
+        } catch (e) {
+            this.scoresError = this.messageOf(e);
+        } finally {
+            this.busy = false;
+        }
+    }
 
     /** Plain message from an Apex or JS error, for inline display. */
     messageOf(e) {

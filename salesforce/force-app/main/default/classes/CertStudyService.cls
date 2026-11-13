@@ -218,6 +218,115 @@ public without sharing class CertStudyService {
         if (!open.isEmpty()) update open;
     }
 
+    // ---------------------------------------------- completed exams (history)
+
+    public class ExamRow {
+        public Id id;
+        public String certCode;
+        public String certName;
+        public Date examDate;
+        public Date outcomeOn;
+        public String status;       // Passed, Not passed or Dropped
+        public Boolean hasScores;
+    }
+
+    /** Exams that are no longer open (passed, not passed, dropped), newest first. Never deleted, so always reachable. */
+    public static List<ExamRow> examHistory(Id userId) {
+        List<ExamRow> out = new List<ExamRow>();
+        for (Study_Goal__c g : [
+            SELECT Id, Exam_Date__c, Outcome_Recorded_On__c, Status__c, Section_Scores_JSON__c,
+                Cert__r.Cert_Code__c, Cert__r.Name
+            FROM Study_Goal__c
+            WHERE User__c = :userId AND Status__c != :GOAL_STUDYING AND Cert__c != null
+            ORDER BY Outcome_Recorded_On__c DESC NULLS LAST, CreatedDate DESC
+            LIMIT 200
+        ]) {
+            ExamRow r = new ExamRow();
+            r.id = g.Id;
+            r.certCode = g.Cert__r.Cert_Code__c;
+            r.certName = g.Cert__r.Name;
+            r.examDate = g.Exam_Date__c;
+            r.outcomeOn = g.Outcome_Recorded_On__c;
+            r.status = g.Status__c;
+            r.hasScores = String.isNotBlank(g.Section_Scores_JSON__c);
+            out.add(r);
+        }
+        return out;
+    }
+
+    /**
+     * Record an exam attempt that already happened (for example an earlier failure) without going through
+     * "studying for". The exam date is when it was taken (today if blank, never in the future) and becomes
+     * the outcome date, so attempts sort in the order they happened. Passed also marks the cert earned.
+     * Returns the new record's Id.
+     */
+    public static Id addPastExam(Id userId, String certCode, Date examDate, Boolean passed) {
+        if (String.isBlank(certCode)) throw new ServiceException('Pick a certification.');
+        List<Cert__c> certs = [SELECT Id, Is_Aggregate__c FROM Cert__c WHERE Cert_Code__c = :certCode LIMIT 1];
+        if (certs.isEmpty()) throw new ServiceException('That certification was not found.');
+        if (certs[0].Is_Aggregate__c == true) {
+            throw new ServiceException('That credential has no exam of its own. Pick one of its individual exams.');
+        }
+        Date taken = examDate == null ? Date.today() : examDate;
+        if (taken > Date.today()) {
+            throw new ServiceException('A past attempt cannot have a future date. Add upcoming exams under "Add an exam".');
+        }
+        Study_Goal__c g = new Study_Goal__c(
+            User__c = userId, Cert__c = certs[0].Id, Exam_Date__c = taken, Outcome_Recorded_On__c = taken,
+            Status__c = passed == true ? GOAL_PASSED : GOAL_NOT_PASSED
+        );
+        insert g;
+        if (passed == true) setEarned(userId, certCode, true);
+        return g.Id;
+    }
+
+    /**
+     * Permanently deletes one completed exam record (passed, not passed or dropped), including any section scores.
+     * Open exams use removeGoal instead. Deleting a Passed record does not un-earn the certification.
+     */
+    public static List<ExamRow> deleteCompletedExam(Id userId, String goalId) {
+        Id gid;
+        try {
+            gid = Id.valueOf(goalId);
+        } catch (Exception e) {
+            throw new ServiceException('That exam was not found.');
+        }
+        List<Study_Goal__c> rows = [
+            SELECT Id FROM Study_Goal__c WHERE Id = :gid AND User__c = :userId AND Status__c != :GOAL_STUDYING
+        ];
+        if (rows.isEmpty()) throw new ServiceException('That exam was not found.');
+        delete rows;
+        return examHistory(userId);
+    }
+
+    /** Previously saved section scores for a "Not passed" exam, ready to review and edit (rows empty if none). */
+    public static ScorePreview savedScores(Id userId, String goalId) {
+        Study_Goal__c g = ownGoal(userId, goalId, GOAL_NOT_PASSED);
+        Cert__c c = [SELECT Name, Passing_Score__c, Domains_JSON__c FROM Cert__c WHERE Id = :g.Cert__c];
+        ScorePreview out = new ScorePreview();
+        out.certName = c.Name;
+        out.passingEstimated = c.Passing_Score__c == null;
+        out.passingScore = (c.Passing_Score__c == null ? EXAM_DEFAULT_PASS : c.Passing_Score__c).intValue();
+        out.domains = domainNames(c);
+        if (String.isNotBlank(g.Section_Scores_JSON__c)) {
+            try {
+                for (Object o : (List<Object>) JSON.deserializeUntyped(g.Section_Scores_JSON__c)) {
+                    Map<String, Object> m = (Map<String, Object>) o;
+                    ScoreRow r = new ScoreRow();
+                    r.name = (String) m.get('name');
+                    r.pct = Decimal.valueOf(String.valueOf(m.get('pct')));
+                    r.domain = (String) m.get('domain');
+                    // A section renamed since saving no longer matches: leave it unmatched for the learner to fix.
+                    if (r.domain != null && !out.domains.contains(r.domain)) r.domain = matchDomain(r.name, out.domains);
+                    out.rows.add(r);
+                }
+            } catch (Exception e) {
+                out.rows = new List<ScoreRow>();
+            }
+        }
+        return out;
+    }
+
     // -------------------------------- exam section scores (after a failed exam)
 
     public static final Decimal EXAM_DEFAULT_PASS = 70;
@@ -1708,14 +1817,21 @@ public without sharing class CertStudyService {
     ) {
         if (String.isBlank(s.User_Key__c)) return null;
         String key = s.User_Key__c;
+        // Originals this learner has already been given a copy of (a same-object semi-join is not allowed in SOQL).
+        Set<Id> seen = new Set<Id>();
+        for (Question__c c : [
+            SELECT Source_Question__c FROM Question__c
+            WHERE Study_Session__r.User_Key__c = :key AND Source_Question__c != null
+        ]) {
+            seen.add(c.Source_Question__c);
+        }
         List<Question__c> candidates = [
             SELECT Id, Domain__c, Cert__c, Cert__r.Cert_Code__c FROM Question__c
             WHERE Status__c = 'Answered' AND Source_Question__c = null
                 AND Cert__r.Cert_Code__c IN :codes
                 AND Study_Session__r.User_Key__c != :key
                 AND (Difficulty__c >= :minD OR Difficulty__c = :unratedMatch)
-                AND Id NOT IN (SELECT Source_Question__c FROM Question__c
-                               WHERE Study_Session__r.User_Key__c = :key AND Source_Question__c != null)
+                AND Id NOT IN :seen
                 AND Id NOT IN (SELECT Question__c FROM Question_Report__c WHERE Question__c != null)
             LIMIT 200
         ];

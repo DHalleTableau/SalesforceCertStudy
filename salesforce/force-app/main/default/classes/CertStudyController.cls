@@ -322,24 +322,97 @@ public with sharing class CertStudyController {
         @AuraEnabled public String recordedLabel; // e.g. "Nov 12, 2026"
     }
 
+    public class ExamHistoryView {
+        @AuraEnabled public String id;
+        @AuraEnabled public String certCode;
+        @AuraEnabled public String certName;
+        @AuraEnabled public String status;       // Passed, Not passed, Dropped
+        @AuraEnabled public String examDateLabel;
+        @AuraEnabled public String outcomeLabel;
+        @AuraEnabled public Boolean hasScores;
+        @AuraEnabled public Boolean canEditScores; // only a "Not passed" exam can carry section scores
+    }
+
+    private static String dateLabel(Date d) {
+        return d == null ? null : DateTime.newInstance(d, Time.newInstance(12, 0, 0, 0)).format('MMM d, yyyy');
+    }
+
+    /** Completed exams (passed, not passed, dropped). They stay available here; they are only filtered from the main list. */
+    @AuraEnabled
+    public static List<ExamHistoryView> getExamHistory() {
+        try {
+            List<ExamHistoryView> out = new List<ExamHistoryView>();
+            for (CertStudyService.ExamRow r : CertStudyService.examHistory(UserInfo.getUserId())) {
+                ExamHistoryView v = new ExamHistoryView();
+                v.id = String.valueOf(r.id);
+                v.certCode = r.certCode;
+                v.certName = r.certName;
+                v.status = r.status;
+                v.examDateLabel = dateLabel(r.examDate);
+                v.outcomeLabel = dateLabel(r.outcomeOn);
+                v.hasScores = r.hasScores;
+                v.canEditScores = r.status == CertStudyService.GOAL_NOT_PASSED;
+                out.add(v);
+            }
+            return out;
+        } catch (Exception e) {
+            throw wrap(e);
+        }
+    }
+
+    /** Add an attempt that already happened. Returns the new record's Id (to open its scores). */
+    @AuraEnabled
+    public static String addPastExam(String certCode, String examDate, Boolean passed) {
+        try {
+            Date d = String.isBlank(examDate) ? null : Date.valueOf(examDate);
+            return String.valueOf(CertStudyService.addPastExam(UserInfo.getUserId(), certCode, d, passed));
+        } catch (Exception e) {
+            throw wrap(e);
+        }
+    }
+
+    /** Delete a completed exam record (and its scores). Returns the remaining completed exams. */
+    @AuraEnabled
+    public static List<ExamHistoryView> deleteExam(String goalId) {
+        try {
+            CertStudyService.deleteCompletedExam(UserInfo.getUserId(), goalId);
+            return getExamHistory();
+        } catch (Exception e) {
+            throw wrap(e);
+        }
+    }
+
+    /** Saved section scores for a "Not passed" exam, to review or edit. Rows are empty when none were entered. */
+    @AuraEnabled
+    public static ScorePreviewView getSavedSectionScores(String goalId) {
+        try {
+            return toScorePreviewView(CertStudyService.savedScores(UserInfo.getUserId(), goalId));
+        } catch (Exception e) {
+            throw wrap(e);
+        }
+    }
+
+    private static ScorePreviewView toScorePreviewView(CertStudyService.ScorePreview p) {
+        ScorePreviewView v = new ScorePreviewView();
+        v.certName = p.certName;
+        v.passingScore = p.passingScore;
+        v.passingEstimated = p.passingEstimated;
+        v.domains = p.domains;
+        for (CertStudyService.ScoreRow r : p.rows) {
+            ScoreRowView rv = new ScoreRowView();
+            rv.name = r.name;
+            rv.pct = r.pct;
+            rv.domain = r.domain;
+            v.rows.add(rv);
+        }
+        return v;
+    }
+
     /** Read pasted exam results and suggest which app section each line belongs to. Nothing is saved. */
     @AuraEnabled
     public static ScorePreviewView previewSectionScores(String goalId, String text) {
         try {
-            CertStudyService.ScorePreview p = CertStudyService.previewScores(UserInfo.getUserId(), goalId, text);
-            ScorePreviewView v = new ScorePreviewView();
-            v.certName = p.certName;
-            v.passingScore = p.passingScore;
-            v.passingEstimated = p.passingEstimated;
-            v.domains = p.domains;
-            for (CertStudyService.ScoreRow r : p.rows) {
-                ScoreRowView rv = new ScoreRowView();
-                rv.name = r.name;
-                rv.pct = r.pct;
-                rv.domain = r.domain;
-                v.rows.add(rv);
-            }
-            return v;
+            return toScorePreviewView(CertStudyService.previewScores(UserInfo.getUserId(), goalId, text));
         } catch (Exception e) {
             throw wrap(e);
         }
