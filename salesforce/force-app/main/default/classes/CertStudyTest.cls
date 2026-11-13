@@ -78,6 +78,10 @@ private class CertStudyTest {
     }
 
     private static void addReady(String code, Integer n, String format) {
+        addReady(code, n, format, 1);
+    }
+
+    private static void addReady(String code, Integer n, String format, Integer difficulty) {
         Id cid = certId(code);
         List<Question__c> qs = new List<Question__c>();
         for (Integer i = 0; i < n; i++) {
@@ -85,7 +89,7 @@ private class CertStudyTest {
                 Cert__c = cid,
                 Stem__c = 'Stem ' + i,
                 Format__c = format,
-                Difficulty__c = 1,
+                Difficulty__c = difficulty,
                 Domain__c = 'Agents',
                 Options_JSON__c = '[{"key":"A","text":"Alpha"},{"key":"B","text":"Bravo"},{"key":"C","text":"Charlie"},{"key":"D","text":"Delta"}]',
                 Correct_JSON__c = format == 'multi' ? '["A","C"]' : '["A"]',
@@ -485,5 +489,544 @@ private class CertStudyTest {
         Test.stopTest();
         Assert.isNotNull(jobId);
         Assert.areEqual('Ended', [SELECT Status__c FROM Study_Session__c WHERE User_Key__c = 'idle@example.com'].Status__c);
+    }
+
+    // ------------------------------------------------- upcoming exams (study goals)
+
+    @IsTest
+    static void goalsAddUpdateAndRejectBadCerts() {
+        Id uid = UserInfo.getUserId();
+        List<CertStudyService.GoalRow> rows = CertStudyService.saveGoal(uid, 'AI-201', Date.today().addDays(10));
+        Assert.areEqual(1, rows.size());
+        Assert.areEqual('AI-201', rows[0].certCode);
+        Assert.areEqual(Date.today().addDays(10), rows[0].examDate);
+        Assert.isFalse(rows[0].overdue);
+
+        rows = CertStudyService.saveGoal(uid, 'AI-201', null);
+        Assert.areEqual(1, rows.size(), 'the same cert updates its open goal instead of adding another');
+        Assert.isNull(rows[0].examDate, 'a blank date clears it');
+
+        for (String bad : new List<String>{ 'AGG-1', 'NOPE-9', '' }) {
+            try {
+                CertStudyService.saveGoal(uid, bad, null);
+                Assert.fail('expected an error for ' + bad);
+            } catch (CertStudyService.ServiceException e) {
+                Assert.isNotNull(e.getMessage());
+            }
+        }
+        Assert.areEqual(1, CertStudyService.openGoals(uid).size());
+    }
+
+    @IsTest
+    static void goalsGoOverdueThenRecordOutcome() {
+        Id uid = UserInfo.getUserId();
+        List<CertStudyService.GoalRow> rows = CertStudyService.saveGoal(uid, 'AI-201', Date.today().addDays(-2));
+        Assert.isTrue(rows[0].overdue, 'the exam date has passed');
+
+        rows = CertStudyService.recordOutcome(uid, String.valueOf(rows[0].id), false);
+        Assert.isTrue(rows.isEmpty(), 'a recorded goal is no longer open');
+        Study_Goal__c g = [SELECT Status__c, Outcome_Recorded_On__c FROM Study_Goal__c];
+        Assert.areEqual('Not passed', g.Status__c);
+        Assert.areEqual(Date.today(), g.Outcome_Recorded_On__c);
+        Assert.isTrue(CertStudyService.earnedCertCodes(uid).isEmpty(), 'not passing earns nothing');
+
+        // A retake is a new goal; passing marks the cert earned.
+        rows = CertStudyService.saveGoal(uid, 'AI-201', Date.today().addDays(-1));
+        CertStudyService.recordOutcome(uid, String.valueOf(rows[0].id), true);
+        Assert.isTrue(CertStudyService.earnedCertCodes(uid).contains('AI-201'));
+        Assert.areEqual(1, [SELECT COUNT() FROM Study_Goal__c WHERE Status__c = 'Passed']);
+        Assert.areEqual(1, [SELECT COUNT() FROM Study_Goal__c WHERE Status__c = 'Not passed'], 'history is kept');
+    }
+
+    @IsTest
+    static void goalsAreRemovedSoftlyAndSettledByEarning() {
+        Id uid = UserInfo.getUserId();
+        List<CertStudyService.GoalRow> rows = CertStudyService.saveGoal(uid, 'AI-201', null);
+        rows = CertStudyService.removeGoal(uid, String.valueOf(rows[0].id));
+        Assert.isTrue(rows.isEmpty());
+        Assert.areEqual('Dropped', [SELECT Status__c FROM Study_Goal__c].Status__c, 'kept, not deleted');
+
+        CertStudyService.saveGoal(uid, 'AI-201', null);
+        CertStudyService.setEarned(uid, 'AI-201', true);
+        Assert.isTrue(CertStudyService.openGoals(uid).isEmpty(), 'marking a cert earned settles its open goal');
+        Assert.areEqual(1, [SELECT COUNT() FROM Study_Goal__c WHERE Status__c = 'Passed']);
+    }
+
+    @IsTest
+    static void goalsBelongToTheirOwner() {
+        Id uid = UserInfo.getUserId();
+        List<CertStudyService.GoalRow> rows = CertStudyService.saveGoal(uid, 'AI-201', null);
+        Id other = '005000000000001'; // some other user's Id (this goal is not theirs)
+        try {
+            CertStudyService.removeGoal(other, String.valueOf(rows[0].id));
+            Assert.fail('another learner must not be able to change this goal');
+        } catch (CertStudyService.ServiceException e) {
+            Assert.isTrue(e.getMessage().contains('not found'));
+        }
+        Assert.isTrue(CertStudyService.openGoals(other).isEmpty());
+        Assert.areEqual(1, CertStudyService.openGoals(uid).size());
+    }
+
+    // ------------------------------------------------- exam section scores
+
+    private static final String EXAM_REPORT =
+        'Section Name: Section Score\n'
+        + 'Prompt Engineering: 83%\n'
+        + 'Data 360 Fundamentals: 58%\n'
+        + 'AI Agents: 67%\n'
+        + 'Testing, Deployment and Maintenance: 67%\n'
+        + 'Governance and Observability: 67%\n'
+        + 'Multi-Agent Orchestration 100%\n'
+        + 'Overall: 120%\n';
+
+    private static void examDomains() {
+        Cert__c c = cert('AI-201');
+        c.Passing_Score__c = 73;
+        c.Domains_JSON__c = JSON.serialize(new List<Object>{
+            new Map<String, Object>{ 'name' => 'Prompt Engineering', 'weight' => 20 },
+            new Map<String, Object>{ 'name' => 'Data 360 Fundamentals', 'weight' => 20 },
+            new Map<String, Object>{ 'name' => 'Agents', 'weight' => 20 },
+            new Map<String, Object>{ 'name' => 'Testing and Deployment', 'weight' => 20 },
+            new Map<String, Object>{ 'name' => 'Governance and Observability', 'weight' => 20 }
+        });
+        update c;
+    }
+
+    private static Id failedGoal() {
+        Id uid = UserInfo.getUserId();
+        List<CertStudyService.GoalRow> rows = CertStudyService.saveGoal(uid, 'AI-201', Date.today().addDays(-1));
+        Id gid = rows[0].id;
+        CertStudyService.recordOutcome(uid, String.valueOf(gid), false);
+        return gid;
+    }
+
+    @IsTest
+    static void parsesPastedExamReport() {
+        List<CertStudyService.ScoreRow> rows = CertStudyService.parseSectionScores(EXAM_REPORT);
+        Assert.areEqual(6, rows.size(), 'header, no-percent and over-100 lines are ignored');
+        Assert.areEqual('Prompt Engineering', rows[0].name);
+        Assert.areEqual(83, rows[0].pct);
+        Assert.areEqual('Testing, Deployment and Maintenance', rows[3].name);
+        Assert.areEqual('Multi-Agent Orchestration', rows[5].name);
+        Assert.areEqual(100, rows[5].pct);
+        Assert.isTrue(CertStudyService.parseSectionScores(null).isEmpty());
+        Assert.isTrue(CertStudyService.parseSectionScores('nothing useful here').isEmpty());
+    }
+
+    @IsTest
+    static void matchesExamSectionNamesToAppSections() {
+        List<String> d = new List<String>{ 'Prompt Engineering', 'Agents', 'Testing and Deployment', 'Data Cloud' };
+        Assert.areEqual('Prompt Engineering', CertStudyService.matchDomain('prompt engineering', d), 'exact, any case');
+        Assert.areEqual('Agents', CertStudyService.matchDomain('AI Agents', d), 'one section name inside the other');
+        Assert.areEqual('Testing and Deployment', CertStudyService.matchDomain('Testing, Deployment and Maintenance', d));
+        Assert.isNull(CertStudyService.matchDomain('Multi-Agent Orchestration', d), 'no clear match stays blank');
+        Assert.isNull(CertStudyService.matchDomain('', d));
+    }
+
+    @IsTest
+    static void examWeightsScaleWithTheGapToThePassMark() {
+        String json = JSON.serialize(new List<Object>{
+            new Map<String, Object>{ 'name' => 'a', 'pct' => 58, 'domain' => 'Data' },
+            new Map<String, Object>{ 'name' => 'b', 'pct' => 67, 'domain' => 'Agents' },
+            new Map<String, Object>{ 'name' => 'c', 'pct' => 100, 'domain' => 'Orch' },
+            new Map<String, Object>{ 'name' => 'd', 'pct' => 20, 'domain' => 'Deep' },
+            new Map<String, Object>{ 'name' => 'e', 'pct' => 10, 'domain' => null }
+        });
+        Map<String, Decimal> w = CertStudyService.weightsFromScores(json, 73);
+        Assert.areEqual(2.4, w.get('Data'));
+        Assert.areEqual(1.86, w.get('Agents'));
+        Assert.areEqual(0.5, w.get('Orch'), 'passed sections come up about half as often');
+        Assert.areEqual(3.0, w.get('Deep'), 'capped at 25 points under');
+        Assert.areEqual(4, w.size(), 'unmatched lines do not affect weighting');
+        Assert.areEqual(1.5, CertStudyService.weightsFromScores(
+            '[{"name":"x","pct":69.99,"domain":"D"}]', null).get('D'), 'default pass mark is 70');
+        Assert.areEqual(0.5, CertStudyService.weightsFromScores(
+            '[{"name":"x","pct":70,"domain":"D"}]', null).get('D'));
+        Assert.isTrue(CertStudyService.weightsFromScores('not json', 73).isEmpty());
+    }
+
+    @IsTest
+    static void previewAndSaveExamResults() {
+        examDomains();
+        Id uid = UserInfo.getUserId();
+        Id gid = failedGoal();
+
+        CertStudyService.ScorePreview p = CertStudyService.previewScores(uid, String.valueOf(gid), EXAM_REPORT);
+        Assert.areEqual(73, p.passingScore);
+        Assert.isFalse(p.passingEstimated);
+        Assert.areEqual(5, p.domains.size());
+        Assert.areEqual(6, p.rows.size());
+        Assert.areEqual('Prompt Engineering', p.rows[0].domain);
+        Assert.areEqual('Testing and Deployment', p.rows[3].domain);
+        Assert.isNull(p.rows[5].domain, 'Multi-Agent Orchestration has no section here');
+        Assert.isNull([SELECT Section_Scores_JSON__c FROM Study_Goal__c WHERE Id = :gid].Section_Scores_JSON__c, 'preview saves nothing');
+
+        String msg = CertStudyService.saveScores(uid, String.valueOf(gid), p.rows);
+        Assert.isTrue(msg.contains('Data 360 Fundamentals'), msg);
+        Assert.isNotNull([SELECT Section_Scores_JSON__c FROM Study_Goal__c WHERE Id = :gid].Section_Scores_JSON__c);
+
+        // Scores can be entered only for a recorded "Not passed" exam, by its owner, with valid values.
+        try {
+            CertStudyService.saveScores(uid, String.valueOf(gid), new List<CertStudyService.ScoreRow>());
+            Assert.fail('rows are required');
+        } catch (CertStudyService.ServiceException e) {
+            Assert.isTrue(e.getMessage().contains('at least one'));
+        }
+        CertStudyService.ScoreRow bad = new CertStudyService.ScoreRow();
+        bad.name = 'x';
+        bad.pct = 50;
+        bad.domain = 'Not A Section';
+        try {
+            CertStudyService.saveScores(uid, String.valueOf(gid), new List<CertStudyService.ScoreRow>{ bad });
+            Assert.fail('unknown section');
+        } catch (CertStudyService.ServiceException e) {
+            Assert.isTrue(e.getMessage().contains('not a section'));
+        }
+        bad.domain = null;
+        bad.pct = 101;
+        try {
+            CertStudyService.saveScores(uid, String.valueOf(gid), new List<CertStudyService.ScoreRow>{ bad });
+            Assert.fail('bad score');
+        } catch (CertStudyService.ServiceException e) {
+            Assert.isTrue(e.getMessage().contains('between 0 and 100'));
+        }
+        try {
+            CertStudyService.previewScores('005000000000001', String.valueOf(gid), EXAM_REPORT);
+            Assert.fail('not their exam');
+        } catch (CertStudyService.ServiceException e) {
+            Assert.isTrue(e.getMessage().contains('not found'));
+        }
+    }
+
+    @IsTest
+    static void examResultsReplaceHistoryWeightsUntilPassed() {
+        examDomains();
+        Id uid = UserInfo.getUserId();
+        // History says Agents is the weak spot; the exam says Data 360 Fundamentals is.
+        answerHistory(String.valueOf(uid), 'AI-201', 'Agents', 1, 9);
+        answerHistory(String.valueOf(uid), 'AI-201', 'Prompt Engineering', 9, 1);
+        Set<String> codes = new Set<String>{ 'AI-201' };
+        Map<String, Decimal> before = CertStudyService.focusWeights(String.valueOf(uid), codes).get('AI-201');
+        Assert.isTrue(before.get('Agents') >= CertStudyService.FOCUS_WEAK_WEIGHT);
+
+        Id gid = failedGoal();
+        CertStudyService.ScorePreview p = CertStudyService.previewScores(uid, String.valueOf(gid), EXAM_REPORT);
+        CertStudyService.saveScores(uid, String.valueOf(gid), p.rows);
+
+        Map<String, Decimal> after = CertStudyService.focusWeights(String.valueOf(uid), codes).get('AI-201');
+        Assert.areEqual(2.4, after.get('Data 360 Fundamentals'));
+        Assert.areEqual(0.5, after.get('Prompt Engineering'));
+        Assert.isFalse(after.containsKey('Agents') && after.get('Agents') >= 2.9, 'history weights are replaced');
+        Assert.areEqual(1, CertStudyService.examFocusRows(uid).size());
+        Assert.areEqual('AI-201', CertStudyService.examFocusRows(uid)[0].certCode);
+
+        CertStudyService.setEarned(uid, 'AI-201', true);
+        Assert.isTrue(CertStudyService.examFocusRows(uid).isEmpty(), 'passing ends the override');
+        Map<String, Decimal> restored = CertStudyService.focusWeights(String.valueOf(uid), codes).get('AI-201');
+        Assert.areEqual(before.get('Agents'), restored.get('Agents'), 'history weights are back');
+    }
+
+    // ------------------------------------------------- reuse of other learners' answered questions
+
+    private static void pauseGeneration() {
+        update new Cert__c(Id = certId('AI-201'), Last_Failure_At__c = DateTime.now());
+    }
+
+    @IsTest
+    static void emptyPoolReusesQuestionsOthersAnsweredOnlyOnce() {
+        pauseGeneration();
+        answerHistory('someone@example.com', 'AI-201', 'Agents', 2, 0);
+        Study_Session__c s = practiceSession(null); // learner min@example.com
+        Question__c first = CertStudyService.nextQuestionRecord(s);
+        Assert.isNotNull(first, 'a question another learner answered is served when nothing fresh is ready');
+        Question__c copy = [SELECT Source_Question__c, Study_Session__c, Status__c FROM Question__c WHERE Id = :first.Id];
+        Assert.isNotNull(copy.Source_Question__c);
+        Assert.areEqual(s.Id, copy.Study_Session__c);
+        Assert.areEqual('Served', copy.Status__c);
+        Assert.areEqual('Answered', [SELECT Status__c FROM Question__c WHERE Id = :copy.Source_Question__c].Status__c,
+            'the original stays with the first learner');
+
+        CertStudyService.gradeCore(s, new List<String>{ 'A' });
+        Question__c second = CertStudyService.nextQuestionRecord(s);
+        Assert.isNotNull(second);
+        Assert.areNotEqual(copy.Source_Question__c,
+            [SELECT Source_Question__c FROM Question__c WHERE Id = :second.Id].Source_Question__c, 'a different original');
+        CertStudyService.gradeCore(s, new List<String>{ 'A' });
+        Assert.isNull(CertStudyService.nextQuestionRecord(s), 'both originals have now been seen');
+    }
+
+    @IsTest
+    static void reuseSkipsOwnReportedAndTooEasyQuestions() {
+        pauseGeneration();
+        answerHistory('min@example.com', 'AI-201', 'Agents', 2, 0); // this learner's own answers
+        Study_Session__c s = practiceSession(null);
+        Assert.isNull(CertStudyService.nextQuestionRecord(s), 'own questions are never reused');
+
+        answerHistory('someone@example.com', 'AI-201', 'Agents', 1, 0);
+        Question__c theirs = [
+            SELECT Id FROM Question__c WHERE Study_Session__r.User_Key__c = 'someone@example.com'
+        ];
+        insert new Question_Report__c(
+            Question__c = theirs.Id, Cert__c = certId('AI-201'), Reporter__c = UserInfo.getUserId(), Issue_Type__c = 'Inaccurate'
+        );
+        Assert.isNull(CertStudyService.nextQuestionRecord(s), 'a reported question is not recirculated');
+        delete [SELECT Id FROM Question_Report__c];
+
+        Study_Session__c hard = practiceSession(4);
+        Assert.isNull(CertStudyService.nextQuestionRecord(hard), 'minimum difficulty still applies (these are level 1)');
+    }
+
+    // ------------------------------------------------- weak-area focus
+
+    /** An ended Practice session with right + wrong answered questions in one domain. */
+    private static void answerHistory(String key, String code, String domain, Integer right, Integer wrong) {
+        Id cid = certId(code);
+        Study_Session__c s = new Study_Session__c(
+            User_Key__c = key, Cert_Codes__c = ids(new List<String>{ code }), Mode__c = 'Practice',
+            Status__c = 'Ended', Started_At__c = DateTime.now().addDays(-1), Last_Activity__c = DateTime.now().addDays(-1)
+        );
+        insert s;
+        List<Question__c> qs = new List<Question__c>();
+        for (Integer i = 0; i < right + wrong; i++) {
+            qs.add(new Question__c(
+                Cert__c = cid, Stem__c = 'History ' + domain + ' ' + i, Format__c = 'single', Difficulty__c = 1,
+                Domain__c = domain,
+                Options_JSON__c = '[{"key":"A","text":"Alpha"},{"key":"B","text":"Bravo"}]',
+                Correct_JSON__c = '["A"]', Feedback_MD__c = 'f', Status__c = 'Answered', Study_Session__c = s.Id
+            ));
+        }
+        insert qs;
+        List<Answer__c> answers = new List<Answer__c>();
+        for (Integer i = 0; i < qs.size(); i++) {
+            answers.add(new Answer__c(
+                Study_Session__c = s.Id, Question__c = qs[i].Id, User_Answer__c = 'A',
+                Is_Correct__c = i < right, Answered_At__c = DateTime.now()
+            ));
+        }
+        insert answers;
+    }
+
+    private static Map<String, Boolean> noPrereqs() {
+        return new Map<String, Boolean>{ 'AI-201' => false };
+    }
+
+    @IsTest
+    static void focusWeightsFavorLowAccuracyDomains() {
+        answerHistory('focus@example.com', 'AI-201', 'Agents', 5, 0);
+        answerHistory('focus@example.com', 'AI-201', 'Data', 0, 5);
+        Map<String, Map<String, Decimal>> w = CertStudyService.focusWeights('focus@example.com', new Set<String>{ 'AI-201' });
+        Decimal agents = w.get('AI-201').get('Agents');
+        Decimal data = w.get('AI-201').get('Data');
+        Assert.isTrue(data > agents, 'the weaker domain gets the higher weight');
+        // overall accuracy is 50%: Data (0/5) shrinks to 25% => 2.5, Agents (5/5) to 75% => 1.5
+        Assert.isTrue(Math.abs(data - 2.5) < 0.01, String.valueOf(data));
+        Assert.isTrue(Math.abs(agents - 1.5) < 0.01, String.valueOf(agents));
+
+        Assert.isTrue(CertStudyService.answeredCertCodes('focus@example.com').contains('AI-201'));
+        Assert.isTrue(CertStudyService.answeredCertCodes('someone.else@example.com').isEmpty());
+        Assert.isTrue(CertStudyService.focusWeights('nobody@example.com', new Set<String>{ 'AI-201' }).isEmpty());
+        Assert.isTrue(CertStudyService.parseFocusWeights('not json').isEmpty(), 'a bad snapshot turns focus off');
+    }
+
+    @IsTest
+    static void focusOnlyAppliesToCertsWithHistory() {
+        CertStudyLlm.instance = new FakeLlm();
+        CertStudyService.StartOutcome none = CertStudyService.startSessionCore(
+            'f1@example.com', new List<String>{ 'AI-201' }, noPrereqs(), null, true
+        );
+        Assert.isNull(none.error);
+        Study_Session__c s0 = [SELECT Focus_Weak_Areas__c, Domain_Weights_JSON__c FROM Study_Session__c WHERE Id = :none.session.Id];
+        Assert.isFalse(s0.Focus_Weak_Areas__c, 'no history, so focus stays off');
+        Assert.isNull(s0.Domain_Weights_JSON__c);
+
+        answerHistory('f2@example.com', 'AI-201', 'Agents', 1, 4);
+        CertStudyService.StartOutcome o = CertStudyService.startSessionCore(
+            'f2@example.com', new List<String>{ 'AI-201' }, noPrereqs(), null, true
+        );
+        Study_Session__c s = [SELECT Focus_Weak_Areas__c, Domain_Weights_JSON__c FROM Study_Session__c WHERE Id = :o.session.Id];
+        Assert.isTrue(s.Focus_Weak_Areas__c);
+        Assert.isTrue(s.Domain_Weights_JSON__c.contains('Agents'));
+        Assert.isTrue(CertStudyService.focusNote(s).contains('Agents'), CertStudyService.focusNote(s));
+        Assert.isNull(CertStudyService.focusNote(s0), 'no note when focus is off');
+    }
+
+    @IsTest
+    static void focusedPracticePrefersTheWeakDomain() {
+        CertStudyLlm.instance = new FakeLlm();
+        // Extreme weights make the outcome effectively deterministic.
+        addReadyDomain('AI-201', 'Agents', 1);
+        addReadyDomain('AI-201', 'Data', 1);
+        CertStudyService.StartOutcome o = CertStudyService.startSessionCore(
+            'f3@example.com', new List<String>{ 'AI-201' }, noPrereqs(), null, false
+        );
+        Study_Session__c s = o.session;
+        s.Focus_Weak_Areas__c = true;
+        s.Domain_Weights_JSON__c = '{"AI-201":{"Data":1000,"Agents":0.001}}';
+        update s;
+        Question__c first = CertStudyService.nextQuestionRecord(s);
+        Assert.areEqual('Data', first.Domain__c, 'the heavily weighted domain is served first');
+    }
+
+    @IsTest
+    static void testModeIgnoresFocusSettings() {
+        CertStudyLlm.instance = new FakeLlm();
+        addReadyDomain('AI-201', 'Agents', 2);
+        update new Cert__c(Id = certId('AI-201'), Num_Questions__c = 2, Duration_Min__c = 30, Passing_Score__c = 70);
+        CertStudyService.StartOutcome o = CertStudyService.startTestCore('t@example.com', 'AI-201', false);
+        Assert.isNull(o.error);
+        Assert.isFalse([SELECT Focus_Weak_Areas__c FROM Study_Session__c WHERE Id = :o.session.Id].Focus_Weak_Areas__c);
+    }
+
+    @IsTest
+    static void poolGeneratesForShortWeakDomain() {
+        CertStudyLlm.instance = new FakeLlm();
+        CertStudyService.StartOutcome o = CertStudyService.startSessionCore(
+            'f4@example.com', new List<String>{ 'AI-201' }, noPrereqs(), null, false
+        );
+        Study_Session__c s = o.session;
+        s.Focus_Weak_Areas__c = true;
+        s.Domain_Weights_JSON__c = '{"AI-201":{"Data":2.5,"Agents":1.0}}';
+        update s;
+        Id cid = certId('AI-201');
+        Assert.areEqual('Data', CertStudyService.focusDomainNeeded(cid, 'AI-201'), 'weak domain has no ready questions');
+        addReadyDomain('AI-201', 'Data', CertStudyService.FOCUS_DOMAIN_READY);
+        Assert.isNull(CertStudyService.focusDomainNeeded(cid, 'AI-201'), 'enough ready in the weak domain');
+    }
+
+    private static void addReadyDomain(String code, String domain, Integer n) {
+        Id cid = certId(code);
+        List<Question__c> qs = new List<Question__c>();
+        for (Integer i = 0; i < n; i++) {
+            qs.add(new Question__c(
+                Cert__c = cid, Stem__c = 'Ready ' + domain + ' ' + i, Format__c = 'single', Difficulty__c = 1,
+                Domain__c = domain,
+                Options_JSON__c = '[{"key":"A","text":"Alpha"},{"key":"B","text":"Bravo"},{"key":"C","text":"Charlie"},{"key":"D","text":"Delta"}]',
+                Correct_JSON__c = '["A"]', Feedback_MD__c = '**A. Alpha** -- Correct: because.', Status__c = 'Ready'
+            ));
+        }
+        insert qs;
+    }
+
+    // ------------------------------------------------- waiting reason and retry
+
+    @IsTest
+    static void waitMessageExplainsCooldownAndKickClearsIt() {
+        CertStudyLlm.instance = new FakeLlm();
+        Id cid = certId('AI-201');
+        update new Cert__c(Id = cid, Last_Failure_At__c = DateTime.now().addMinutes(-3));
+        String msg = CertStudyService.waitMessage(new Set<String>{ 'AI-201' });
+        Assert.isTrue(msg.contains('paused for about 7 more minutes'), msg);
+        Assert.isFalse(msg.contains('Exception'), 'no internal error text is shown to learners');
+
+        CertStudyService.kickGeneration(new Set<String>{ 'AI-201' });
+        Assert.isNull(
+            [SELECT Last_Failure_At__c FROM Cert__c WHERE Id = :cid].Last_Failure_At__c,
+            'retry clears the failure cooldown'
+        );
+    }
+
+    @IsTest
+    static void kickClearsOnlyStalledLocks() {
+        CertStudyLlm.instance = new FakeLlm();
+        Id cid = certId('AI-201');
+        update new Cert__c(Id = cid, Top_Up_Started_At__c = DateTime.now().addMinutes(-5));
+        Assert.isTrue(CertStudyService.waitMessage(new Set<String>{ 'AI-201' }).contains('being written'));
+        CertStudyService.kickGeneration(new Set<String>{ 'AI-201' });
+        // The stalled lock was released (a new chain may have re-taken it, which is a later timestamp).
+        DateTime lock = cert('AI-201').Top_Up_Started_At__c;
+        Assert.isTrue(lock == null || lock > DateTime.now().addMinutes(-1), 'old lock must not survive a retry');
+    }
+
+    @IsTest
+    static void waitMessageWithNothingWrongAsksToCheckAgain() {
+        update new Cert__c(Id = certId('AI-201'), Top_Up_Started_At__c = null, Last_Failure_At__c = null);
+        String msg = CertStudyService.waitMessage(new Set<String>{ 'AI-201' });
+        Assert.isTrue(msg.contains('Check again'), msg);
+        Assert.isNull(CertStudyService.waitMessage(new Set<String>()));
+    }
+
+    // ------------------------------------------------- minimum difficulty
+
+    private static void addReadyAt(String code, Integer n, Integer difficulty) {
+        addReady(code, n, 'single', difficulty);
+    }
+
+    private static Study_Session__c practiceSession(Integer minDifficulty) {
+        CertStudyLlm.instance = new FakeLlm();
+        // AI-201 has a prerequisite, so answer the prerequisite prompt up front ("no").
+        CertStudyService.StartOutcome res = CertStudyService.startSessionCore(
+            'min@example.com', new List<String>{ 'AI-201' }, new Map<String, Boolean>{ 'AI-201' => false }, minDifficulty
+        );
+        Assert.isNull(res.error);
+        Assert.isNull(res.pendingCode);
+        return [SELECT Id, Cert_Codes__c, Min_Difficulty__c, Mode__c FROM Study_Session__c WHERE Id = :res.session.Id];
+    }
+
+    @IsTest
+    static void nextDifficultyRespectsMinimum() {
+        Assert.areEqual(1, CertStudyGenerator.nextDifficulty(0, 1));
+        Assert.areEqual(5, CertStudyGenerator.nextDifficulty(4, 1));
+        for (Integer total = 0; total < 20; total++) {
+            Integer d = CertStudyGenerator.nextDifficulty(total, 4);
+            Assert.isTrue(d == 4 || d == 5, 'min 4 only yields 4 or 5, got ' + d);
+        }
+        Assert.areEqual(5, CertStudyGenerator.nextDifficulty(7, 5));
+        Assert.areEqual(1, CertStudyGenerator.nextDifficulty(5, 0), 'out-of-range minimum clamps to 1');
+    }
+
+    @IsTest
+    static void minDifficultyDefaultsToOneAndClamps() {
+        Assert.areEqual(1, practiceSession(null).Min_Difficulty__c.intValue(), 'no selection means 1');
+        Assert.areEqual(5, practiceSession(9).Min_Difficulty__c.intValue(), 'clamped to 5');
+        Assert.areEqual(1, practiceSession(-3).Min_Difficulty__c.intValue(), 'clamped to 1');
+        Assert.areEqual(3, practiceSession(3).Min_Difficulty__c.intValue());
+    }
+
+    @IsTest
+    static void practiceOnlyServesQuestionsAtOrAboveMinimum() {
+        addReadyAt('AI-201', 3, 2);
+        addReadyAt('AI-201', 1, 4);
+        Study_Session__c s = practiceSession(4);
+        Question__c first = CertStudyService.nextQuestionRecord(s);
+        Assert.isNotNull(first);
+        Assert.areEqual(4, first.Difficulty__c.intValue());
+        // Answer it so the next call claims a new row; only difficulty 2 rows remain.
+        CertStudyService.gradeCore(s, new List<String>{ 'A' });
+        Assert.isNull(CertStudyService.nextQuestionRecord(s), 'easier questions are not served at minimum 4');
+        Assert.areEqual(3, [SELECT COUNT() FROM Question__c WHERE Status__c = 'Ready'], 'easier questions stay cached');
+    }
+
+    @IsTest
+    static void defaultMinimumServesAnyDifficulty() {
+        addReadyAt('AI-201', 1, 2);
+        Study_Session__c s = practiceSession(null);
+        Assert.areEqual(2, CertStudyService.nextQuestionRecord(s).Difficulty__c.intValue());
+    }
+
+    @IsTest
+    static void topUpTargetsHighestUnmetMinimum() {
+        practiceSession(4);
+        Id cid = certId('AI-201');
+        Integer target = CertStudyGenerator.POOL_SIZE;
+        // Plenty of easy questions: minimum 1 is covered but minimum 4 is not.
+        addReadyAt('AI-201', target, 2);
+        Assert.areEqual(4, CertStudyService.unmetMinDifficulty(cid, target));
+        // Enough hard questions too: nothing left to generate.
+        addReadyAt('AI-201', target, 5);
+        Assert.isNull(CertStudyService.unmetMinDifficulty(cid, target));
+    }
+
+    @IsTest
+    static void poolJobGeneratesAtOrAboveMinimum() {
+        markOverviewDone('AI-201');
+        practiceSession(4);
+        addReadyAt('AI-201', CertStudyGenerator.POOL_SIZE, 1);
+        CertStudyPoolJob job = new CertStudyPoolJob(certId('AI-201'));
+        job.runOnce(cert('AI-201'));
+        // The seeded rows are all difficulty 1, so exactly one new row at 4 or above proves the target.
+        Assert.areEqual(
+            1, [SELECT COUNT() FROM Question__c WHERE Difficulty__c >= 4],
+            'generated for the session minimum despite a full easy pool'
+        );
     }
 }

@@ -4,12 +4,30 @@
 // "Coming soon" list shown above the release log. No versions or dates on purpose.
 // Learner-facing only; remove an item when it ships (and add it to RELEASES).
 export const UPCOMING = [
+    'Exam-matched question formats: each certification will use the answer formats of its real exam, such as pick one of three, pick one of four, or pick two.',
+    'More licensing and formula questions: edition and plan comparison scenarios (which plan solves which problem) and formula and filter logic, for the certifications where they show up on the exam.',
     'A personal stats dashboard: your scores over time, by certification and section, and how close you are to passing.',
     'Non-Salesforce certifications, starting with AI certifications that are useful at work.',
     'Logging in with Salesforce single sign-on, instead of waiting for an email code.'
 ];
 
 export const RELEASES = [
+    // In progress: set the exact date here and in certStudy.js (APP_RELEASED) when v0.14.0 is published.
+    {
+        version: 'v0.14.0',
+        date: 'Nov 2026',
+        items: [
+            'Study on the go: Cert Study works in your phone\'s browser. Start a session on your laptop and pick it up where you left off on your phone, or the other way around.',
+            'Minimum difficulty for practice: choose a level from 1 to 5 and only get questions at that level or harder.',
+            'Focus on my weaker sections: for certifications you have practiced or tested before, get more practice questions from the sections you scored lowest in. Practice only, never in tests.',
+            'Quick select: a Deselect all button, and Select last session to reselect the certifications from your most recent practice or test.',
+            'Upcoming exams: add the certifications you are studying for, with an optional exam date, then use Select upcoming exams to pick them in one click. After your exam date we ask whether you passed.',
+            'Exam results: if you did not pass, paste in your section-level scores, check how each line maps to a section, and practice focuses on the sections below the pass mark until you pass. Sections you passed still come up, about half as often.',
+            'Your selections are now kept when you open What\'s new or send a suggestion, then come back.',
+            'Retiring exams are hidden by default (untick the box to see them).',
+            'A clearer wait when questions are slow: the screen now tells you why, Check again restarts generation right away, and more questions are kept ready so fast answerers wait less. If none are ready, practice can serve a question another learner has already answered (never one you have seen).'
+        ]
+    },
     {
         version: 'v0.13.0',
         date: 'Nov 5, 2026',

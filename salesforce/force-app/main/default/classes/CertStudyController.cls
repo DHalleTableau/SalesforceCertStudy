@@ -97,6 +97,8 @@ public with sharing class CertStudyController {
         @AuraEnabled public Integer answered = 0;
         @AuraEnabled public Integer correct = 0;
         @AuraEnabled public QuestionView question; // null = still generating
+        @AuraEnabled public String waitMessage; // why there is no question yet (set only when question is null)
+        @AuraEnabled public String focusNote;   // weak-area focus line for the session screen (null when off)
         // prerequisite prompt (start only)
         @AuraEnabled public String pendingCode;
         @AuraEnabled public String pendingCertName;
@@ -227,6 +229,199 @@ public with sharing class CertStudyController {
         }
     }
 
+    // ---------------------------------------------- upcoming exams (study goals)
+
+    public class GoalView {
+        @AuraEnabled public String id;
+        @AuraEnabled public String certCode;
+        @AuraEnabled public String certName;
+        @AuraEnabled public String examDate;      // ISO yyyy-MM-dd for the date input; null = none
+        @AuraEnabled public String examDateLabel; // e.g. "Dec 3, 2026"
+        @AuraEnabled public Integer daysLeft;     // null when no date; negative once passed
+        @AuraEnabled public Boolean overdue;      // date passed, outcome not recorded yet
+    }
+
+    private static List<GoalView> toGoalViews(List<CertStudyService.GoalRow> rows) {
+        List<GoalView> out = new List<GoalView>();
+        Date today = Date.today();
+        for (CertStudyService.GoalRow r : rows) {
+            GoalView v = new GoalView();
+            v.id = String.valueOf(r.id);
+            v.certCode = r.certCode;
+            v.certName = r.certName;
+            v.overdue = r.overdue == true;
+            if (r.examDate != null) {
+                v.examDate = String.valueOf(r.examDate); // yyyy-MM-dd
+                v.examDateLabel = DateTime.newInstance(r.examDate, Time.newInstance(12, 0, 0, 0)).format('MMM d, yyyy');
+                v.daysLeft = today.daysBetween(r.examDate);
+            }
+            out.add(v);
+        }
+        return out;
+    }
+
+    /** The learner's open "studying for" exams. */
+    @AuraEnabled
+    public static List<GoalView> getGoals() {
+        try {
+            return toGoalViews(CertStudyService.openGoals(UserInfo.getUserId()));
+        } catch (Exception e) {
+            throw wrap(e);
+        }
+    }
+
+    /** Add an exam to study for, or change its date. examDate is yyyy-MM-dd or blank for no date. */
+    @AuraEnabled
+    public static List<GoalView> saveGoal(String certCode, String examDate) {
+        try {
+            Date d = String.isBlank(examDate) ? null : Date.valueOf(examDate);
+            return toGoalViews(CertStudyService.saveGoal(UserInfo.getUserId(), certCode, d));
+        } catch (Exception e) {
+            throw wrap(e);
+        }
+    }
+
+    @AuraEnabled
+    public static List<GoalView> removeGoal(String goalId) {
+        try {
+            return toGoalViews(CertStudyService.removeGoal(UserInfo.getUserId(), goalId));
+        } catch (Exception e) {
+            throw wrap(e);
+        }
+    }
+
+    /** After the exam date: did the learner pass? A pass also marks the cert as earned. */
+    @AuraEnabled
+    public static List<GoalView> recordGoalOutcome(String goalId, Boolean passed) {
+        try {
+            return toGoalViews(CertStudyService.recordOutcome(UserInfo.getUserId(), goalId, passed));
+        } catch (Exception e) {
+            throw wrap(e);
+        }
+    }
+
+    // ---- exam section scores (after a failed exam)
+
+    public class ScoreRowView {
+        @AuraEnabled public String name;
+        @AuraEnabled public Decimal pct;
+        @AuraEnabled public String domain;
+    }
+
+    public class ScorePreviewView {
+        @AuraEnabled public String certName;
+        @AuraEnabled public Integer passingScore;
+        @AuraEnabled public Boolean passingEstimated;
+        @AuraEnabled public List<String> domains;
+        @AuraEnabled public List<ScoreRowView> rows = new List<ScoreRowView>();
+    }
+
+    public class ExamFocusView {
+        @AuraEnabled public String certCode;
+        @AuraEnabled public String certName;
+        @AuraEnabled public String recordedLabel; // e.g. "Nov 12, 2026"
+    }
+
+    /** Read pasted exam results and suggest which app section each line belongs to. Nothing is saved. */
+    @AuraEnabled
+    public static ScorePreviewView previewSectionScores(String goalId, String text) {
+        try {
+            CertStudyService.ScorePreview p = CertStudyService.previewScores(UserInfo.getUserId(), goalId, text);
+            ScorePreviewView v = new ScorePreviewView();
+            v.certName = p.certName;
+            v.passingScore = p.passingScore;
+            v.passingEstimated = p.passingEstimated;
+            v.domains = p.domains;
+            for (CertStudyService.ScoreRow r : p.rows) {
+                ScoreRowView rv = new ScoreRowView();
+                rv.name = r.name;
+                rv.pct = r.pct;
+                rv.domain = r.domain;
+                v.rows.add(rv);
+            }
+            return v;
+        } catch (Exception e) {
+            throw wrap(e);
+        }
+    }
+
+    /** Save the confirmed rows (JSON list of {name, pct, domain}). Returns a one-line summary. */
+    @AuraEnabled
+    public static String saveSectionScores(String goalId, String rowsJson) {
+        try {
+            List<CertStudyService.ScoreRow> rows = new List<CertStudyService.ScoreRow>();
+            if (String.isNotBlank(rowsJson)) {
+                for (Object o : (List<Object>) JSON.deserializeUntyped(rowsJson)) {
+                    Map<String, Object> m = (Map<String, Object>) o;
+                    CertStudyService.ScoreRow r = new CertStudyService.ScoreRow();
+                    r.name = (String) m.get('name');
+                    r.pct = m.get('pct') == null ? null : Decimal.valueOf(String.valueOf(m.get('pct')));
+                    r.domain = (String) m.get('domain');
+                    rows.add(r);
+                }
+            }
+            return CertStudyService.saveScores(UserInfo.getUserId(), goalId, rows);
+        } catch (Exception e) {
+            throw wrap(e);
+        }
+    }
+
+    /** Certs whose practice focus currently comes from exam results (until the learner passes). */
+    @AuraEnabled
+    public static List<ExamFocusView> getExamFocus() {
+        try {
+            List<ExamFocusView> out = new List<ExamFocusView>();
+            for (CertStudyService.ExamFocusRow r : CertStudyService.examFocusRows(UserInfo.getUserId())) {
+                ExamFocusView v = new ExamFocusView();
+                v.certCode = r.certCode;
+                v.certName = r.certName;
+                v.recordedLabel = r.recordedOn == null ? null
+                    : DateTime.newInstance(r.recordedOn, Time.newInstance(12, 0, 0, 0)).format('MMM d, yyyy');
+                out.add(v);
+            }
+            return out;
+        } catch (Exception e) {
+            throw wrap(e);
+        }
+    }
+
+    /** Cert codes the learner has answered before (Practice or Test) or entered exam results for: where weak-area focus can apply. */
+    @AuraEnabled
+    public static List<String> getFocusableCerts() {
+        try {
+            Set<String> set1 = new Set<String>(CertStudyService.answeredCertCodes(CertStudyService.resolveUserKey(null)));
+            for (CertStudyService.ExamFocusRow r : CertStudyService.examFocusRows(UserInfo.getUserId())) set1.add(r.certCode);
+            List<String> codes = new List<String>(set1);
+            codes.sort();
+            return codes;
+        } catch (Exception e) {
+            throw wrap(e);
+        }
+    }
+
+    public class LastSelectionView {
+        @AuraEnabled public String mode;
+        @AuraEnabled public List<String> certCodes = new List<String>();
+        @AuraEnabled public String timerMode;
+        @AuraEnabled public Integer minDifficulty = 1;
+    }
+
+    /** The certs, mode and options of the learner's most recent session (empty certCodes if none). */
+    @AuraEnabled
+    public static LastSelectionView getLastSelection() {
+        try {
+            CertStudyService.LastSelection l = CertStudyService.lastSelection(CertStudyService.resolveUserKey(null));
+            LastSelectionView v = new LastSelectionView();
+            v.mode = l.mode;
+            v.certCodes = l.certCodes;
+            v.timerMode = l.timerMode;
+            v.minDifficulty = l.minDifficulty;
+            return v;
+        } catch (Exception e) {
+            throw wrap(e);
+        }
+    }
+
     /** Mark or unmark a cert as earned for the current learner; returns the updated list of earned codes. */
     @AuraEnabled
     public static List<String> setCertEarned(String certCode, Boolean earned) {
@@ -271,9 +466,15 @@ public with sharing class CertStudyController {
         }
     }
 
-    /** prereqAnswersJson: {"CODE": true/false, ...} answers collected from earlier prompts. */
+    /**
+     * prereqAnswersJson: {"CODE": true/false, ...} answers collected from earlier prompts.
+     * minDifficulty: 1-5, only questions at or above it are served; null means 1.
+     * focusWeakAreas: weight questions toward the learner's weaker sections (only for certs they have answered before).
+     */
     @AuraEnabled
-    public static SessionView startPractice(List<String> certCodes, String prereqAnswersJson) {
+    public static SessionView startPractice(
+        List<String> certCodes, String prereqAnswersJson, Integer minDifficulty, Boolean focusWeakAreas
+    ) {
         try {
             Map<String, Boolean> answers = new Map<String, Boolean>();
             if (String.isNotBlank(prereqAnswersJson)) {
@@ -281,7 +482,7 @@ public with sharing class CertStudyController {
                 for (String k : raw.keySet()) answers.put(k.toUpperCase(), raw.get(k) == true);
             }
             CertStudyService.StartOutcome res = CertStudyService.startSessionCore(
-                CertStudyService.resolveUserKey(null), certCodes, answers
+                CertStudyService.resolveUserKey(null), certCodes, answers, minDifficulty, focusWeakAreas
             );
             SessionView v = new SessionView();
             if (res.error != null) {
@@ -295,6 +496,24 @@ public with sharing class CertStudyController {
                 return v;
             }
             fillSession(v, res.session, true);
+            return v;
+        } catch (Exception e) {
+            throw wrap(e);
+        }
+    }
+
+    /**
+     * "Check again" while waiting for a question: clears the failure cooldown and any stalled
+     * generation lock for the session's certs, requests a fresh top-up, and returns the session.
+     */
+    @AuraEnabled
+    public static SessionView retryGeneration() {
+        try {
+            Study_Session__c s = CertStudyService.activeSession(CertStudyService.resolveUserKey(null));
+            SessionView v = new SessionView();
+            if (s == null) return v;
+            CertStudyService.kickGeneration(CertStudyService.sessionCodes(s));
+            fillSession(v, s, true);
             return v;
         } catch (Exception e) {
             throw wrap(e);
@@ -694,6 +913,7 @@ public with sharing class CertStudyController {
             return;
         }
         Set<String> codes = CertStudyService.sessionCodes(s);
+        v.focusNote = CertStudyService.focusNote(s);
         for (Cert__c c : [
             SELECT Name, Is_Aggregate__c, Num_Questions__c, Duration_Min__c, Passing_Score__c, Domains_JSON__c
             FROM Cert__c WHERE Cert_Code__c IN :codes ORDER BY Name
@@ -713,6 +933,7 @@ public with sharing class CertStudyController {
         }
         Question__c q = claimIfNeeded ? CertStudyService.nextQuestionRecord(s) : currentOnly(s.Id);
         if (q != null) v.question = toView(q, v.answered + 1, new Set<String>(), false);
+        else v.waitMessage = CertStudyService.waitMessage(codes);
     }
 
     private static void fillTest(SessionView v, Study_Session__c s) {
@@ -743,6 +964,7 @@ public with sharing class CertStudyController {
         v.isPaused = s.Paused__c == true;
         Question__c q = CertStudyService.testQuestion(s, v.answered);
         if (q != null) v.question = toView(q, v.answered + 1, new Set<String>(), false);
+        else v.waitMessage = CertStudyService.waitMessage(testCodes);
         v.elapsedSeconds = CertStudyService.elapsedSeconds(s);
         v.clockRunning = s.Resumed_At__c != null;
     }

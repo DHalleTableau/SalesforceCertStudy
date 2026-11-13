@@ -69,6 +69,20 @@ public without sharing class CertStudyPoolJob implements Queueable, Database.All
         if (!sr.isSuccess()) requestTopUp(certCodes);
     }
 
+    /**
+     * Pool below target overall; or, only when a session asked for it, too few hard-enough rows (minimum
+     * difficulty) or too few rows in a weak domain (weak-area focus).
+     */
+    private static Boolean needsTopUp(
+        Id certId, String certCode, Map<Id, Integer> readyByCert, Boolean anyHighMin, Boolean anyFocus
+    ) {
+        Integer target = CertStudyService.poolTarget(certId);
+        Integer ready = readyByCert.containsKey(certId) ? readyByCert.get(certId) : 0;
+        if (ready < target) return true;
+        if (anyHighMin && CertStudyService.unmetMinDifficulty(certId, target) != null) return true;
+        return anyFocus && CertStudyService.focusDomainNeeded(certId, certCode) != null;
+    }
+
     /** Start a job chain for each cert that has content, needs questions, and is not already locked. */
     public static void requestTopUp(Set<String> certCodes) {
         if (certCodes == null || certCodes.isEmpty()) return;
@@ -90,34 +104,42 @@ public without sharing class CertStudyPoolJob implements Queueable, Database.All
             readyByCert.put((Id) ar.get('certId'), (Integer) ar.get('n'));
         }
 
+        // Only pay for per-difficulty counts when someone actually asked for a minimum above 1.
+        Boolean anyHighMin = [
+            SELECT COUNT() FROM Study_Session__c
+            WHERE Status__c = 'Active' AND Mode__c = 'Practice' AND Min_Difficulty__c > 1
+        ] > 0;
+        Boolean anyFocus = [
+            SELECT COUNT() FROM Study_Session__c
+            WHERE Status__c = 'Active' AND Mode__c = 'Practice' AND Focus_Weak_Areas__c = true
+        ] > 0;
+
         // Cheap unlocked pre-check first, so a learner's turn never waits on a
         // row lock held by a running generation job for the same cert.
         Set<Id> candidates = new Set<Id>();
         for (Cert__c c : [
-            SELECT Id, Top_Up_Started_At__c, Grounding_Chars__c, Last_Failure_At__c
+            SELECT Id, Cert_Code__c, Top_Up_Started_At__c, Grounding_Chars__c, Last_Failure_At__c
             FROM Cert__c
             WHERE Cert_Code__c IN :certCodes
         ]) {
             if (c.Grounding_Chars__c == null || c.Grounding_Chars__c == 0) continue;
             if (c.Top_Up_Started_At__c != null && c.Top_Up_Started_At__c > staleBefore) continue;
             if (c.Last_Failure_At__c != null && c.Last_Failure_At__c > cooldownBefore) continue;
-            Integer ready = readyByCert.containsKey(c.Id) ? readyByCert.get(c.Id) : 0;
-            if (ready >= CertStudyService.poolTarget(c.Id)) continue;
+            if (!needsTopUp(c.Id, c.Cert_Code__c, readyByCert, anyHighMin, anyFocus)) continue;
             candidates.add(c.Id);
         }
         if (candidates.isEmpty()) return;
 
         List<Cert__c> toStart = new List<Cert__c>();
         for (Cert__c c : [
-            SELECT Id, Top_Up_Started_At__c, Is_Aggregate__c, Grounding_Chars__c
+            SELECT Id, Cert_Code__c, Top_Up_Started_At__c, Is_Aggregate__c, Grounding_Chars__c
             FROM Cert__c
             WHERE Id IN :candidates
             FOR UPDATE
         ]) {
             if (c.Grounding_Chars__c == null || c.Grounding_Chars__c == 0) continue;
             if (c.Top_Up_Started_At__c != null && c.Top_Up_Started_At__c > staleBefore) continue;
-            Integer ready = readyByCert.containsKey(c.Id) ? readyByCert.get(c.Id) : 0;
-            if (ready >= CertStudyService.poolTarget(c.Id)) continue;
+            if (!needsTopUp(c.Id, c.Cert_Code__c, readyByCert, anyHighMin, anyFocus)) continue;
             if (toStart.size() >= slots) break;
             if (Limits.getQueueableJobs() + toStart.size() >= Limits.getLimitQueueableJobs()) break;
             c.Top_Up_Started_At__c = DateTime.now();
@@ -240,18 +262,19 @@ public without sharing class CertStudyPoolJob implements Queueable, Database.All
             return true;
         }
 
-        Integer ready = [
-            SELECT COUNT() FROM Question__c
-            WHERE Cert__c = :cert.Id AND Status__c = 'Ready' AND Study_Session__c = null
-        ];
         Integer target = CertStudyService.poolTarget(cert.Id);
-        if (ready >= target) return false;
+        // Pool is mixed difficulty; a session's minimum difficulty needs its own
+        // claimable depth, so the Ready pool can grow beyond POOL_SIZE.
+        Integer minDifficulty = CertStudyService.unmetMinDifficulty(cert.Id, target);
+        // Weak-area focus: a learner's weakest domain is short of ready questions, so generate for it.
+        String focusDomain = CertStudyService.focusDomainNeeded(cert.Id, cert.Cert_Code__c);
+        if (minDifficulty == null && focusDomain == null) return false;
 
         Integer total = [SELECT COUNT() FROM Question__c WHERE Cert__c = :cert.Id];
-        Integer difficulty = CertStudyGenerator.nextDifficulty(total);
+        Integer difficulty = CertStudyGenerator.nextDifficulty(total, minDifficulty == null ? 1 : minDifficulty);
         String format = CertStudyGenerator.nextFormat(total);
         String style = CertStudyGenerator.nextStyle(total);
-        String domain = CertStudyGenerator.nextDomain(cert, total);
+        String domain = focusDomain != null ? focusDomain : CertStudyGenerator.nextDomain(cert, total);
 
         List<String> avoidStems = new List<String>();
         Integer avoidLimit = CertStudyGenerator.AVOID_STEMS_LIMIT;
@@ -311,6 +334,7 @@ public without sharing class CertStudyPoolJob implements Queueable, Database.All
         attempt = 0;
         fallback = null;
         fallbackRatio = null;
-        return ready + 1 < target;
+        return CertStudyService.unmetMinDifficulty(cert.Id, target) != null
+            || CertStudyService.focusDomainNeeded(cert.Id, cert.Cert_Code__c) != null;
     }
 }

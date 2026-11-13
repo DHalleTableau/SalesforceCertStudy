@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>Section_Scores_JSON__c</fullName>
+    <description>Section-level results the learner entered after a failed exam: [{"name": official section name, "pct": score, "domain": matching app section or blank}]. Drives weak-area focus for the cert until the learner passes.</description>
+    <label>Section Scores JSON</label>
+    <length>32768</length>
+    <visibleLines>5</visibleLines>
+    <type>LongTextArea</type>
+</CustomField>

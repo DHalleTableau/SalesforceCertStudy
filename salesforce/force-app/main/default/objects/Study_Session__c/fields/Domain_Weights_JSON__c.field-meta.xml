@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>Domain_Weights_JSON__c</fullName>
+    <description>Snapshot taken at session start: {"CERT_CODE": {"Domain name": weight}}. Weight 1 is neutral; higher means ask more often.</description>
+    <label>Domain Weights JSON</label>
+    <length>32768</length>
+    <visibleLines>5</visibleLines>
+    <type>LongTextArea</type>
+</CustomField>

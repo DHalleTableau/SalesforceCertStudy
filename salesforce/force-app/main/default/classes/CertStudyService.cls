@@ -91,7 +91,367 @@ public without sharing class CertStudyService {
         } else {
             delete [SELECT Id FROM User_Cert__c WHERE Unique_Key__c = :key];
         }
+        if (earned == true) closeOpenGoals(userId, certs[0].Id, GOAL_PASSED);
         return earnedCertCodes(userId);
+    }
+
+    // ------------------------------------------- study goals (upcoming exams)
+
+    public static final String GOAL_STUDYING = 'Studying';
+    public static final String GOAL_PASSED = 'Passed';
+    public static final String GOAL_NOT_PASSED = 'Not passed';
+    public static final String GOAL_DROPPED = 'Dropped';
+    public static final Integer MAX_OPEN_GOALS = 10;
+
+    public class GoalRow {
+        public Id id;
+        public String certCode;
+        public String certName;
+        public Date examDate;      // null = no date set
+        public Boolean overdue;    // the exam date has passed and no outcome is recorded yet
+    }
+
+    /** The learner's open goals: dated ones soonest first, then undated by cert name. */
+    public static List<GoalRow> openGoals(Id userId) {
+        List<GoalRow> out = new List<GoalRow>();
+        Date today = Date.today();
+        for (Study_Goal__c g : [
+            SELECT Id, Exam_Date__c, Cert__r.Cert_Code__c, Cert__r.Name
+            FROM Study_Goal__c
+            WHERE User__c = :userId AND Status__c = :GOAL_STUDYING AND Cert__c != null
+            ORDER BY Exam_Date__c ASC NULLS LAST, Cert__r.Name ASC
+        ]) {
+            GoalRow r = new GoalRow();
+            r.id = g.Id;
+            r.certCode = g.Cert__r.Cert_Code__c;
+            r.certName = g.Cert__r.Name;
+            r.examDate = g.Exam_Date__c;
+            r.overdue = g.Exam_Date__c != null && g.Exam_Date__c < today;
+            out.add(r);
+        }
+        return out;
+    }
+
+    /** Add a cert to "studying for", or change the date of the open goal already there (null clears the date). */
+    public static List<GoalRow> saveGoal(Id userId, String certCode, Date examDate) {
+        if (String.isBlank(certCode)) throw new ServiceException('Pick a certification.');
+        List<Cert__c> certs = [SELECT Id, Is_Aggregate__c FROM Cert__c WHERE Cert_Code__c = :certCode LIMIT 1];
+        if (certs.isEmpty()) throw new ServiceException('That certification was not found.');
+        if (certs[0].Is_Aggregate__c == true) {
+            throw new ServiceException('That credential has no exam of its own. Pick one of its individual exams.');
+        }
+        List<Study_Goal__c> existing = [
+            SELECT Id FROM Study_Goal__c
+            WHERE User__c = :userId AND Cert__c = :certs[0].Id AND Status__c = :GOAL_STUDYING
+            LIMIT 1
+        ];
+        if (!existing.isEmpty()) {
+            existing[0].Exam_Date__c = examDate;
+            update existing[0];
+        } else {
+            Integer open = [SELECT COUNT() FROM Study_Goal__c WHERE User__c = :userId AND Status__c = :GOAL_STUDYING];
+            if (open >= MAX_OPEN_GOALS) {
+                throw new ServiceException('You can track up to ' + MAX_OPEN_GOALS + ' upcoming exams. Remove one first.');
+            }
+            insert new Study_Goal__c(
+                User__c = userId, Cert__c = certs[0].Id, Exam_Date__c = examDate, Status__c = GOAL_STUDYING
+            );
+        }
+        return openGoals(userId);
+    }
+
+    private static Study_Goal__c ownOpenGoal(Id userId, String goalId) {
+        return ownGoal(userId, goalId, GOAL_STUDYING);
+    }
+
+    private static Study_Goal__c ownGoal(Id userId, String goalId, String status) {
+        if (String.isBlank(goalId)) throw new ServiceException('That exam was not found.');
+        Id gid;
+        try {
+            gid = Id.valueOf(goalId);
+        } catch (Exception e) {
+            throw new ServiceException('That exam was not found.');
+        }
+        List<Study_Goal__c> rows = [
+            SELECT Id, Cert__c, Section_Scores_JSON__c FROM Study_Goal__c
+            WHERE Id = :gid AND User__c = :userId AND Status__c = :status
+        ];
+        if (rows.isEmpty()) throw new ServiceException('That exam was not found.');
+        return rows[0];
+    }
+
+    /** The learner stops tracking this exam (kept as Dropped, not deleted). */
+    public static List<GoalRow> removeGoal(Id userId, String goalId) {
+        Study_Goal__c g = ownOpenGoal(userId, goalId);
+        g.Status__c = GOAL_DROPPED;
+        update g;
+        return openGoals(userId);
+    }
+
+    /**
+     * After the exam date: record whether the learner passed. Passed also marks the cert as earned
+     * (which feeds Hide earned and Up next). Not passed keeps the goal's history; the learner can add
+     * the cert again with a new date for a retake.
+     */
+    public static List<GoalRow> recordOutcome(Id userId, String goalId, Boolean passed) {
+        Study_Goal__c g = ownOpenGoal(userId, goalId);
+        g.Status__c = passed == true ? GOAL_PASSED : GOAL_NOT_PASSED;
+        g.Outcome_Recorded_On__c = Date.today();
+        update g;
+        if (passed == true) {
+            List<Cert__c> certs = [SELECT Cert_Code__c FROM Cert__c WHERE Id = :g.Cert__c LIMIT 1];
+            if (!certs.isEmpty()) setEarned(userId, certs[0].Cert_Code__c, true);
+        }
+        return openGoals(userId);
+    }
+
+    /** Marking a cert earned elsewhere also settles any open goal for it. */
+    private static void closeOpenGoals(Id userId, Id certId, String status) {
+        List<Study_Goal__c> open = [
+            SELECT Id FROM Study_Goal__c
+            WHERE User__c = :userId AND Cert__c = :certId AND Status__c = :GOAL_STUDYING
+        ];
+        for (Study_Goal__c g : open) {
+            g.Status__c = status;
+            g.Outcome_Recorded_On__c = Date.today();
+        }
+        if (!open.isEmpty()) update open;
+    }
+
+    // -------------------------------- exam section scores (after a failed exam)
+
+    public static final Decimal EXAM_DEFAULT_PASS = 70;
+    /** Weight for a section at or above the pass mark: asked about half as often as normal. */
+    public static final Decimal EXAM_PASSED_WEIGHT = 0.5;
+    /** Points below the pass mark at which a section reaches the maximum weight. */
+    public static final Decimal EXAM_FULL_GAP = 25;
+    private static final Set<String> SCORE_STOP_WORDS = new Set<String>{ 'and', 'the', 'of', 'a', 'an', 'for', 'to', 'in' };
+
+    public class ScoreRow {
+        public String name;    // the exam report's own section name
+        public Decimal pct;
+        public String domain;  // the app's matching section, or blank
+    }
+
+    public class ScorePreview {
+        public String certName;
+        public Integer passingScore;
+        public Boolean passingEstimated = false;
+        public List<String> domains = new List<String>();
+        public List<ScoreRow> rows = new List<ScoreRow>();
+    }
+
+    public class ExamFocusRow {
+        public String certCode;
+        public String certName;
+        public Date recordedOn;
+    }
+
+    /** Reads lines like "Prompt Engineering: 83%" (also "Name 83%" or "Name - 83 %"); anything else is ignored. */
+    public static List<ScoreRow> parseSectionScores(String text) {
+        List<ScoreRow> out = new List<ScoreRow>();
+        if (String.isBlank(text)) return out;
+        Pattern p = Pattern.compile('^\\s*(.+?)\\s*[:\\-\\t]?\\s*(\\d{1,3}(?:\\.\\d+)?)\\s*%\\s*$');
+        for (String line : text.split('\n')) {
+            Matcher m = p.matcher(line.trim());
+            if (!m.matches()) continue;
+            Decimal pct = Decimal.valueOf(m.group(2));
+            if (pct > 100) continue;
+            String name = m.group(1).trim();
+            while (name.length() > 0 && (name.endsWith(':') || name.endsWith('-'))) {
+                name = name.substring(0, name.length() - 1).trim();
+            }
+            if (String.isBlank(name)) continue;
+            ScoreRow r = new ScoreRow();
+            r.name = name;
+            r.pct = pct;
+            out.add(r);
+        }
+        return out;
+    }
+
+    private static String normName(String s) {
+        return s == null ? '' : s.toLowerCase().replaceAll('[^a-z0-9]+', ' ').trim();
+    }
+
+    private static Set<String> nameTokens(String normalized) {
+        Set<String> out = new Set<String>();
+        for (String t : normalized.split(' ')) {
+            if (String.isNotBlank(t) && !SCORE_STOP_WORDS.contains(t)) out.add(t);
+        }
+        return out;
+    }
+
+    /** The app section that best matches an exam section name, or null when nothing matches clearly. */
+    public static String matchDomain(String sectionName, List<String> domains) {
+        String n = normName(sectionName);
+        if (n == '' || domains == null) return null;
+        for (String d : domains) if (normName(d) == n) return d;
+        List<String> hits = new List<String>();
+        for (String d : domains) {
+            String nd = normName(d);
+            if (nd != '' && (nd.contains(n) || n.contains(nd))) hits.add(d);
+        }
+        if (hits.size() == 1) return hits[0];
+        Set<String> a = nameTokens(n);
+        String best = null;
+        Decimal bestScore = 0;
+        Boolean tied = false;
+        for (String d : domains) {
+            Set<String> b = nameTokens(normName(d));
+            if (a.isEmpty() || b.isEmpty()) continue;
+            Set<String> both = a.clone();
+            both.retainAll(b);
+            Set<String> either = a.clone();
+            either.addAll(b);
+            Decimal score = Decimal.valueOf(both.size()) / either.size();
+            if (score > bestScore) {
+                bestScore = score;
+                best = d;
+                tied = false;
+            } else if (score == bestScore && score > 0) {
+                tied = true;
+            }
+        }
+        return (best != null && bestScore >= 0.5 && !tied) ? best : null;
+    }
+
+    private static List<String> domainNames(Cert__c c) {
+        List<String> names = new List<String>();
+        for (Map<String, Object> d : CertStudyGenerator.domains(c)) names.add(String.valueOf(d.get('name')));
+        return names;
+    }
+
+    /** Parse pasted results and suggest a section match for each line. The goal must be a recorded "Not passed". */
+    public static ScorePreview previewScores(Id userId, String goalId, String text) {
+        Study_Goal__c g = ownGoal(userId, goalId, GOAL_NOT_PASSED);
+        Cert__c c = [SELECT Name, Passing_Score__c, Domains_JSON__c FROM Cert__c WHERE Id = :g.Cert__c];
+        ScorePreview out = new ScorePreview();
+        out.certName = c.Name;
+        out.passingEstimated = c.Passing_Score__c == null;
+        out.passingScore = (c.Passing_Score__c == null ? EXAM_DEFAULT_PASS : c.Passing_Score__c).intValue();
+        out.domains = domainNames(c);
+        out.rows = parseSectionScores(text);
+        for (ScoreRow r : out.rows) r.domain = matchDomain(r.name, out.domains);
+        return out;
+    }
+
+    /**
+     * Save the confirmed rows on the goal. Returns a one-line summary of what practice will focus on.
+     * Sections left unmatched are kept for the record but do not affect weighting.
+     */
+    public static String saveScores(Id userId, String goalId, List<ScoreRow> rows) {
+        Study_Goal__c g = ownGoal(userId, goalId, GOAL_NOT_PASSED);
+        Cert__c c = [SELECT Cert_Code__c, Passing_Score__c, Domains_JSON__c FROM Cert__c WHERE Id = :g.Cert__c];
+        if (rows == null || rows.isEmpty()) throw new ServiceException('Add at least one section score first.');
+        Set<String> valid = new Set<String>(domainNames(c));
+        List<Map<String, Object>> stored = new List<Map<String, Object>>();
+        for (ScoreRow r : rows) {
+            if (r.pct == null || r.pct < 0 || r.pct > 100) {
+                throw new ServiceException('Scores must be between 0 and 100.');
+            }
+            if (String.isNotBlank(r.domain) && !valid.contains(r.domain)) {
+                throw new ServiceException('"' + r.domain + '" is not a section of this exam.');
+            }
+            stored.add(new Map<String, Object>{
+                'name' => r.name, 'pct' => r.pct, 'domain' => String.isBlank(r.domain) ? null : r.domain
+            });
+        }
+        g.Section_Scores_JSON__c = JSON.serialize(stored);
+        update g;
+
+        Map<String, Decimal> w = weightsFromScores(g.Section_Scores_JSON__c, c.Passing_Score__c);
+        List<String> weak = new List<String>();
+        for (String d : w.keySet()) if (w.get(d) >= FOCUS_WEAK_WEIGHT) weak.add(d);
+        weak.sort();
+        return weak.isEmpty()
+            ? 'Saved. None of the matched sections were below the pass mark, so practice will not change.'
+            : 'Saved. Practice will focus on: ' + String.join(weak, ', ') + '. Focus on my weaker sections is on for this exam until you pass.';
+    }
+
+    /**
+     * Section weights from exam results. Below the pass mark: 1.5 up to 3.0 (bigger gap, bigger weight, full at
+     * 25 points under). At or above it: 0.5, so it still comes up but about half as often as a normal section.
+     */
+    public static Map<String, Decimal> weightsFromScores(String jsonText, Decimal passingScore) {
+        Map<String, Decimal> lowest = new Map<String, Decimal>(); // domain -> weakest score listed for it
+        if (String.isBlank(jsonText)) return new Map<String, Decimal>();
+        try {
+            for (Object o : (List<Object>) JSON.deserializeUntyped(jsonText)) {
+                Map<String, Object> row = (Map<String, Object>) o;
+                String d = (String) row.get('domain');
+                if (String.isBlank(d) || row.get('pct') == null) continue;
+                Decimal pct = Decimal.valueOf(String.valueOf(row.get('pct')));
+                if (!lowest.containsKey(d) || pct < lowest.get(d)) lowest.put(d, pct);
+            }
+        } catch (Exception e) {
+            return new Map<String, Decimal>();
+        }
+        Decimal pass = passingScore == null ? EXAM_DEFAULT_PASS : passingScore;
+        Map<String, Decimal> out = new Map<String, Decimal>();
+        for (String d : lowest.keySet()) {
+            Decimal pct = lowest.get(d);
+            if (pct >= pass) {
+                out.put(d, EXAM_PASSED_WEIGHT);
+            } else {
+                Decimal frac = Math.min((pass - pct) / EXAM_FULL_GAP, 1);
+                out.put(d, (1.5 + 1.5 * frac).setScale(2));
+            }
+        }
+        return out;
+    }
+
+    /** Latest failed exam with saved section scores, per cert code (null codes = all certs). Earned certs are excluded. */
+    private static Map<String, Study_Goal__c> latestScoredGoals(Id userId, Set<String> codes) {
+        Map<String, Study_Goal__c> latest = new Map<String, Study_Goal__c>();
+        if (userId == null) return latest;
+        Set<String> earned = new Set<String>(earnedCertCodes(userId));
+        for (Study_Goal__c g : [
+            SELECT Section_Scores_JSON__c, Outcome_Recorded_On__c, Cert__r.Cert_Code__c, Cert__r.Name, Cert__r.Passing_Score__c
+            FROM Study_Goal__c
+            WHERE User__c = :userId AND Status__c = :GOAL_NOT_PASSED AND Cert__c != null
+            ORDER BY Outcome_Recorded_On__c DESC NULLS LAST, CreatedDate DESC
+        ]) {
+            String cc = g.Cert__r.Cert_Code__c;
+            if (String.isBlank(g.Section_Scores_JSON__c)) continue;
+            if (earned.contains(cc) || latest.containsKey(cc)) continue;
+            if (codes != null && !codes.contains(cc)) continue;
+            latest.put(cc, g);
+        }
+        return latest;
+    }
+
+    /** Per cert, per domain weights from exam results. Active until the learner passes (earns) that cert. */
+    public static Map<String, Map<String, Decimal>> examWeights(Id userId, Set<String> codes) {
+        Map<String, Map<String, Decimal>> out = new Map<String, Map<String, Decimal>>();
+        for (Study_Goal__c g : latestScoredGoals(userId, codes).values()) {
+            Map<String, Decimal> w = weightsFromScores(g.Section_Scores_JSON__c, g.Cert__r.Passing_Score__c);
+            if (!w.isEmpty()) out.put(g.Cert__r.Cert_Code__c, w);
+        }
+        return out;
+    }
+
+    /** Certs whose practice focus currently comes from the learner's exam results (for the picker note). */
+    public static List<ExamFocusRow> examFocusRows(Id userId) {
+        List<ExamFocusRow> out = new List<ExamFocusRow>();
+        for (Study_Goal__c g : latestScoredGoals(userId, null).values()) {
+            if (weightsFromScores(g.Section_Scores_JSON__c, g.Cert__r.Passing_Score__c).isEmpty()) continue;
+            ExamFocusRow r = new ExamFocusRow();
+            r.certCode = g.Cert__r.Cert_Code__c;
+            r.certName = g.Cert__r.Name;
+            r.recordedOn = g.Outcome_Recorded_On__c;
+            out.add(r);
+        }
+        return out;
+    }
+
+    private static Id userIdOrNull(String key) {
+        try {
+            Id i = Id.valueOf(key);
+            return i.getSobjectType() == User.SObjectType ? i : null;
+        } catch (Exception e) {
+            return null;
+        }
     }
 
     public static final Integer MAX_REPORTS_PER_HOUR = 20;
@@ -471,7 +831,29 @@ public without sharing class CertStudyService {
         return certsByCode;
     }
 
+    /** Clamps to 1-5; null (no selection) means 1. */
+    public static Integer clampDifficulty(Integer d) {
+        return d == null ? 1 : Math.max(1, Math.min(5, d));
+    }
+
     public static StartOutcome startSessionCore(String key, List<String> requestedCodes, Map<String, Boolean> answers) {
+        return startSessionCore(key, requestedCodes, answers, null, false);
+    }
+
+    public static StartOutcome startSessionCore(
+        String key, List<String> requestedCodes, Map<String, Boolean> answers, Integer minDifficulty
+    ) {
+        return startSessionCore(key, requestedCodes, answers, minDifficulty, false);
+    }
+
+    /**
+     * focusWeakAreas: weight question selection toward the learner's weaker sections (Practice only).
+     * It only applies to certs with earlier answers; with no history anywhere, the session just runs normally.
+     */
+    public static StartOutcome startSessionCore(
+        String key, List<String> requestedCodes, Map<String, Boolean> answers, Integer minDifficulty,
+        Boolean focusWeakAreas
+    ) {
         StartOutcome out = new StartOutcome();
         Map<String, Cert__c> certsByCode = certsByUpperCode();
 
@@ -526,10 +908,18 @@ public without sharing class CertStudyService {
             User__c = userIdFor(key),
             Cert_Codes__c = delimited,
             Mode__c = MODE_PRACTICE,
+            Min_Difficulty__c = clampDifficulty(minDifficulty),
             Status__c = ACTIVE,
             Started_At__c = DateTime.now(),
             Last_Activity__c = DateTime.now()
         );
+        if (focusWeakAreas == true) {
+            Map<String, Map<String, Decimal>> weights = focusWeights(key, new Set<String>(codes));
+            if (!weights.isEmpty()) {
+                s.Focus_Weak_Areas__c = true;
+                s.Domain_Weights_JSON__c = JSON.serialize(weights);
+            }
+        }
         insert s;
         CertStudyPoolJob.requestTopUpAsync(new Set<String>(codes));
         out.session = s;
@@ -611,13 +1001,42 @@ public without sharing class CertStudyService {
     /** Most recent session for the user (active first by recency); null if none. */
     public static Study_Session__c latestSession(String key) {
         List<Study_Session__c> sessions = [
-            SELECT Id, Cert_Codes__c, Status__c, Started_At__c, Mode__c, Question_Target__c, Timer_Mode__c, Time_Limit_Min__c, Elapsed_Seconds__c, Resumed_At__c, Paused__c, Completed_At__c
+            SELECT Id, Cert_Codes__c, Status__c, Started_At__c, Mode__c, Question_Target__c, Timer_Mode__c, Time_Limit_Min__c, Elapsed_Seconds__c, Resumed_At__c, Paused__c, Completed_At__c,
+                Min_Difficulty__c, Focus_Weak_Areas__c, Domain_Weights_JSON__c
             FROM Study_Session__c
             WHERE User_Key__c = :key
             ORDER BY Started_At__c DESC
             LIMIT 1
         ];
         return sessions.isEmpty() ? null : sessions[0];
+    }
+
+    /** What the learner picked last time, so the picker can offer "Select last session". */
+    public class LastSelection {
+        public String mode;                  // 'practice' | 'test'; null when there is no earlier session
+        public List<String> certCodes = new List<String>();
+        public String timerMode;             // test only: 'Open' | 'Strict'
+        public Integer minDifficulty = 1;    // practice only
+    }
+
+    public static LastSelection lastSelection(String key) {
+        LastSelection out = new LastSelection();
+        List<Study_Session__c> rows = [
+            SELECT Cert_Codes__c, Mode__c, Timer_Mode__c, Min_Difficulty__c
+            FROM Study_Session__c
+            WHERE User_Key__c = :key AND Started_At__c != null
+            ORDER BY Started_At__c DESC
+            LIMIT 1
+        ];
+        if (rows.isEmpty()) return out;
+        Study_Session__c s = rows[0];
+        out.mode = s.Mode__c == MODE_TEST ? 'test' : 'practice';
+        out.timerMode = s.Timer_Mode__c;
+        out.minDifficulty = clampDifficulty(s.Min_Difficulty__c == null ? null : s.Min_Difficulty__c.intValue());
+        List<String> codes = new List<String>(sessionCodes(s));
+        codes.sort();
+        out.certCodes = codes;
+        return out;
     }
 
     public static SummaryData summaryCore(Study_Session__c s, Boolean endIt) {
@@ -961,11 +1380,107 @@ public without sharing class CertStudyService {
         return tests > 0 ? TEST_POOL_TARGET : CertStudyGenerator.POOL_SIZE;
     }
 
+    /**
+     * Highest minimum difficulty (1-5) among active sessions on this cert whose
+     * claimable pool (unclaimed Ready rows at or above it) is below target;
+     * null when every active session is covered. Minimum 1 is always checked
+     * (it also covers tests). Generating for the highest unmet minimum first
+     * means a high-minimum session is never starved by an easy backlog, and
+     * the questions it adds also count toward every lower minimum.
+     */
+    public static Integer unmetMinDifficulty(Id certId, Integer target) {
+        String likeTerm = '%;' + String.valueOf(certId) + ';%';
+        Set<Integer> mins = new Set<Integer>{ 1 };
+        for (Study_Session__c s : [
+            SELECT Min_Difficulty__c FROM Study_Session__c
+            WHERE Status__c = :ACTIVE AND Mode__c = :MODE_PRACTICE AND Cert_Codes__c LIKE :likeTerm
+        ]) {
+            mins.add(clampDifficulty(s.Min_Difficulty__c == null ? null : s.Min_Difficulty__c.intValue()));
+        }
+        List<Integer> ordered = new List<Integer>(mins);
+        ordered.sort();
+        for (Integer i = ordered.size() - 1; i >= 0; i--) {
+            Integer m = ordered[i];
+            Integer ready = m <= 1
+                ? [SELECT COUNT() FROM Question__c WHERE Cert__c = :certId AND Status__c = 'Ready' AND Study_Session__c = null]
+                : [SELECT COUNT() FROM Question__c WHERE Cert__c = :certId AND Status__c = 'Ready' AND Study_Session__c = null AND Difficulty__c >= :m];
+            if (ready < target) return m;
+        }
+        return null;
+    }
+
+    /**
+     * A generation lock this old is treated as stalled when a learner asks for a retry
+     * (a healthy chain refreshes it every question, about every 10 seconds).
+     */
+    public static final Integer KICK_LOCK_MIN = 2;
+
+    private static Integer minutesSince(DateTime t) {
+        return Math.max(0, (Integer) ((DateTime.now().getTime() - t.getTime()) / 60000));
+    }
+
+    /**
+     * Learner-facing reason no question is ready yet (no internal error text).
+     * Null when there are no certs to check.
+     */
+    public static String waitMessage(Set<String> codes) {
+        if (codes == null || codes.isEmpty()) return null;
+        DateTime lockFresh = DateTime.now().addMinutes(-CertStudyPoolJob.LOCK_STALE_MINUTES);
+        Integer cooldownLeft = 0;
+        Boolean generating = false;
+        for (Cert__c c : [
+            SELECT Top_Up_Started_At__c, Last_Failure_At__c FROM Cert__c WHERE Cert_Code__c IN :codes
+        ]) {
+            if (c.Last_Failure_At__c != null) {
+                Integer left = CertStudyPoolJob.FAILURE_COOLDOWN_MIN - minutesSince(c.Last_Failure_At__c);
+                if (left > cooldownLeft) cooldownLeft = left;
+            }
+            if (c.Top_Up_Started_At__c != null && c.Top_Up_Started_At__c > lockFresh) generating = true;
+        }
+        if (cooldownLeft > 0) {
+            return 'Question generation hit repeated errors and is paused for about ' + cooldownLeft
+                + ' more minute' + (cooldownLeft == 1 ? '' : 's') + '. Press Check again to retry now.';
+        }
+        if (generating) return 'Your next question is being written now.';
+        return 'Waiting for the question generator to start. Press Check again if this takes more than a minute.';
+    }
+
+    /**
+     * Learner pressed Check again while waiting: drop the failure cooldown and any stalled
+     * generation lock for these certs, then request a fresh top-up. A fresh lock (a chain that
+     * is actually running) is left alone.
+     */
+    public static void kickGeneration(Set<String> codes) {
+        if (codes == null || codes.isEmpty()) return;
+        DateTime stalledBefore = DateTime.now().addMinutes(-KICK_LOCK_MIN);
+        List<Cert__c> toClear = new List<Cert__c>();
+        for (Cert__c c : [
+            SELECT Id, Top_Up_Started_At__c, Last_Failure_At__c FROM Cert__c WHERE Cert_Code__c IN :codes
+        ]) {
+            Boolean changed = false;
+            if (c.Last_Failure_At__c != null) {
+                c.Last_Failure_At__c = null;
+                changed = true;
+            }
+            if (c.Top_Up_Started_At__c != null && c.Top_Up_Started_At__c < stalledBefore) {
+                c.Top_Up_Started_At__c = null;
+                changed = true;
+            }
+            if (changed) toClear.add(c);
+        }
+        if (!toClear.isEmpty()) update toClear;
+        CertStudyPoolJob.requestTopUpAsync(codes);
+    }
+
     // ------------------------------------------------- agent (markdown) API
 
     public static String startSession(String userKey, String certCodesText, String prereqAnswersText) {
+        return startSession(userKey, certCodesText, prereqAnswersText, null);
+    }
+
+    public static String startSession(String userKey, String certCodesText, String prereqAnswersText, Integer minDifficulty) {
         String key = resolveUserKey(userKey);
-        StartOutcome res = startSessionCore(key, splitList(certCodesText), parseAnswers(prereqAnswersText));
+        StartOutcome res = startSessionCore(key, splitList(certCodesText), parseAnswers(prereqAnswersText), minDifficulty);
         if (res.error != null) return res.error;
         if (res.pendingCode != null) {
             return 'NEEDS_ANSWER (' + res.pendingCode + '): ' + res.pendingCertName + ' has prerequisite certifications: '
@@ -1095,7 +1610,8 @@ public without sharing class CertStudyService {
 
     public static Study_Session__c activeSession(String key) {
         List<Study_Session__c> rows = [
-            SELECT Id, Cert_Codes__c, Status__c, Started_At__c, Mode__c, Question_Target__c, Timer_Mode__c, Time_Limit_Min__c, Elapsed_Seconds__c, Resumed_At__c, Paused__c, Completed_At__c FROM Study_Session__c
+            SELECT Id, Cert_Codes__c, Status__c, Started_At__c, Mode__c, Question_Target__c, Timer_Mode__c, Time_Limit_Min__c, Elapsed_Seconds__c, Resumed_At__c, Paused__c, Completed_At__c,
+                Min_Difficulty__c, Focus_Weak_Areas__c, Domain_Weights_JSON__c FROM Study_Session__c
             WHERE User_Key__c = :key AND Status__c = :ACTIVE
             ORDER BY Started_At__c DESC LIMIT 1
         ];
@@ -1130,14 +1646,26 @@ public without sharing class CertStudyService {
      */
     private static Question__c claimFromPool(Id sessionId, Set<String> codes) {
         List<Study_Session__c> sess = [
-            SELECT Id, Mode__c, Question_Target__c, Cert_Codes__c FROM Study_Session__c WHERE Id = :sessionId
+            SELECT Id, Mode__c, Question_Target__c, Cert_Codes__c, Min_Difficulty__c,
+                Focus_Weak_Areas__c, Domain_Weights_JSON__c, User_Key__c
+            FROM Study_Session__c WHERE Id = :sessionId
         ];
         if (!sess.isEmpty() && isTest(sess[0])) return claimForTest(sess[0], codes);
+        Integer minD = sess.isEmpty() ? 1 : clampDifficulty(sess[0].Min_Difficulty__c == null ? null : sess[0].Min_Difficulty__c.intValue());
+        // Unrated (null-difficulty) legacy rows only count at the default minimum of 1.
+        // "= :null" matches blanks; "= :-1" matches nothing.
+        Integer unratedMatch = minD <= 1 ? null : -1;
+        // Weak-area focus (Practice only): weighted pick by domain. With focus on, only the previous
+        // question's domain is avoided, so the weights (not the rotation) decide how often weak ones appear.
+        Map<String, Map<String, Decimal>> focusMap = (!sess.isEmpty() && sess[0].Focus_Weak_Areas__c == true)
+            ? parseFocusWeights(sess[0].Domain_Weights_JSON__c)
+            : new Map<String, Map<String, Decimal>>();
+        Integer recentLimit = focusMap.isEmpty() ? 3 : 1;
         Set<String> recentDomains = new Set<String>();
         Id lastCert = null;
         for (Question__c r : [
             SELECT Domain__c, Cert__c FROM Question__c
-            WHERE Study_Session__c = :sessionId ORDER BY Served_At__c DESC LIMIT 3
+            WHERE Study_Session__c = :sessionId ORDER BY Served_At__c DESC LIMIT :recentLimit
         ]) {
             if (lastCert == null) lastCert = r.Cert__c;
             if (String.isNotBlank(r.Domain__c)) recentDomains.add(r.Domain__c);
@@ -1148,8 +1676,9 @@ public without sharing class CertStudyService {
             new List<Question__c>(), new List<Question__c>(), new List<Question__c>(), new List<Question__c>()
         };
         for (Question__c c : [
-            SELECT Id, Domain__c, Cert__c FROM Question__c
+            SELECT Id, Domain__c, Cert__c, Cert__r.Cert_Code__c FROM Question__c
             WHERE Study_Session__c = null AND Status__c = 'Ready' AND Cert__r.Cert_Code__c IN :codes
+                AND (Difficulty__c >= :minD OR Difficulty__c = :unratedMatch)
             LIMIT 200
         ]) {
             Boolean sameCert = lastCert != null && c.Cert__c == lastCert;
@@ -1159,10 +1688,246 @@ public without sharing class CertStudyService {
         }
         List<Question__c> candidates = new List<Question__c>();
         for (List<Question__c> b : buckets) {
-            shuffleRecords(b);
+            if (focusMap.isEmpty()) shuffleRecords(b);
+            else weightedShuffleRecords(b, focusMap);
             candidates.addAll(b);
         }
-        return lockAndClaim(sessionId, candidates);
+        Question__c fresh = lockAndClaim(sessionId, candidates);
+        if (fresh != null || sess.isEmpty()) return fresh;
+        // Nothing fresh is ready: reuse a question other learners have already answered (never one this learner has seen).
+        return claimReused(sess[0], codes, minD, unratedMatch, focusMap);
+    }
+
+    /**
+     * Pool empty fallback (Practice only). Copies an answered question from another learner into this session,
+     * so the learner keeps studying while new questions are written. Skips originals this learner already got
+     * (their own, or an earlier copy, via Source_Question__c) and any question with a problem report.
+     */
+    private static Question__c claimReused(
+        Study_Session__c s, Set<String> codes, Integer minD, Integer unratedMatch, Map<String, Map<String, Decimal>> focusMap
+    ) {
+        if (String.isBlank(s.User_Key__c)) return null;
+        String key = s.User_Key__c;
+        List<Question__c> candidates = [
+            SELECT Id, Domain__c, Cert__c, Cert__r.Cert_Code__c FROM Question__c
+            WHERE Status__c = 'Answered' AND Source_Question__c = null
+                AND Cert__r.Cert_Code__c IN :codes
+                AND Study_Session__r.User_Key__c != :key
+                AND (Difficulty__c >= :minD OR Difficulty__c = :unratedMatch)
+                AND Id NOT IN (SELECT Source_Question__c FROM Question__c
+                               WHERE Study_Session__r.User_Key__c = :key AND Source_Question__c != null)
+                AND Id NOT IN (SELECT Question__c FROM Question_Report__c WHERE Question__c != null)
+            LIMIT 200
+        ];
+        if (candidates.isEmpty()) return null;
+        if (focusMap.isEmpty()) shuffleRecords(candidates);
+        else weightedShuffleRecords(candidates, focusMap);
+        Question__c o = [
+            SELECT Id, Cert__c, Stem__c, Format__c, Difficulty__c, Domain__c, Style__c,
+                Options_JSON__c, Correct_JSON__c, Feedback_MD__c
+            FROM Question__c WHERE Id = :candidates[0].Id
+        ];
+        insert new Question__c(
+            Cert__c = o.Cert__c, Stem__c = o.Stem__c, Format__c = o.Format__c, Difficulty__c = o.Difficulty__c,
+            Domain__c = o.Domain__c, Style__c = o.Style__c, Options_JSON__c = o.Options_JSON__c,
+            Correct_JSON__c = o.Correct_JSON__c, Feedback_MD__c = o.Feedback_MD__c,
+            Source_Question__c = o.Id, Study_Session__c = s.Id, Status__c = 'Served', Served_At__c = DateTime.now()
+        );
+        return currentQuestion(s.Id);
+    }
+
+    // ------------------------------------------------ weak-area focus (Practice only)
+
+    /** Shrinkage strength: a domain with few answers is pulled toward the cert's overall accuracy. */
+    public static final Integer FOCUS_SHRINK = 5;
+    /** weight = 1 + FOCUS_BOOST * (1 - accuracy): 100% right is 1.0 (neutral), 0% right is 3.0. */
+    public static final Decimal FOCUS_BOOST = 2.0;
+    /** A domain at or above this weight (accuracy about 75% or lower) counts as weak. */
+    public static final Decimal FOCUS_WEAK_WEIGHT = 1.5;
+    /** Keep at least this many unclaimed Ready questions in each weak domain while a focus session is active. */
+    public static final Integer FOCUS_DOMAIN_READY = 3;
+
+    /** Cert codes the learner has answered at least one question on, in Practice or Test mode. */
+    public static Set<String> answeredCertCodes(String key) {
+        Set<String> out = new Set<String>();
+        for (AggregateResult ar : [
+            SELECT Question__r.Cert__r.Cert_Code__c cc
+            FROM Answer__c
+            WHERE Study_Session__r.User_Key__c = :key
+            GROUP BY Question__r.Cert__r.Cert_Code__c
+        ]) {
+            String c = (String) ar.get('cc');
+            if (String.isNotBlank(c)) out.add(c);
+        }
+        return out;
+    }
+
+    /**
+     * Per cert (with earlier answers), per domain weights from the learner's whole answer history
+     * (Practice and Test). Certs with no history are omitted, so focus simply does not apply to them.
+     */
+    public static Map<String, Map<String, Decimal>> focusWeights(String key, Set<String> codes) {
+        Map<String, Map<String, Decimal>> out = new Map<String, Map<String, Decimal>>();
+        if (codes == null || codes.isEmpty()) return out;
+        Map<String, Integer> certN = new Map<String, Integer>();
+        Map<String, Integer> certRight = new Map<String, Integer>();
+        Map<String, Map<String, Integer>> domN = new Map<String, Map<String, Integer>>();
+        Map<String, Map<String, Integer>> domRight = new Map<String, Map<String, Integer>>();
+        for (AggregateResult ar : [
+            SELECT Question__r.Cert__r.Cert_Code__c cc, Question__r.Domain__c d, Is_Correct__c ok, COUNT(Id) n
+            FROM Answer__c
+            WHERE Study_Session__r.User_Key__c = :key AND Question__r.Cert__r.Cert_Code__c IN :codes
+            GROUP BY Question__r.Cert__r.Cert_Code__c, Question__r.Domain__c, Is_Correct__c
+        ]) {
+            String cc = (String) ar.get('cc');
+            String d = (String) ar.get('d');
+            Integer n = (Integer) ar.get('n');
+            Boolean ok = (Boolean) ar.get('ok');
+            certN.put(cc, (certN.containsKey(cc) ? certN.get(cc) : 0) + n);
+            if (ok == true) certRight.put(cc, (certRight.containsKey(cc) ? certRight.get(cc) : 0) + n);
+            if (String.isBlank(d)) continue;
+            if (!domN.containsKey(cc)) {
+                domN.put(cc, new Map<String, Integer>());
+                domRight.put(cc, new Map<String, Integer>());
+            }
+            Map<String, Integer> dn = domN.get(cc);
+            Map<String, Integer> dr = domRight.get(cc);
+            dn.put(d, (dn.containsKey(d) ? dn.get(d) : 0) + n);
+            if (ok == true) dr.put(d, (dr.containsKey(d) ? dr.get(d) : 0) + n);
+        }
+        Set<String> withHistory = certN.keySet();
+        for (Cert__c c : [SELECT Cert_Code__c, Domains_JSON__c FROM Cert__c WHERE Cert_Code__c IN :withHistory]) {
+            String cc = c.Cert_Code__c;
+            Decimal rightAll = certRight.containsKey(cc) ? certRight.get(cc) : 0;
+            Decimal overall = certN.get(cc) == 0 ? 0.5 : rightAll / certN.get(cc);
+            Set<String> names = new Set<String>();
+            for (Map<String, Object> d : CertStudyGenerator.domains(c)) names.add(String.valueOf(d.get('name')));
+            if (domN.containsKey(cc)) names.addAll(domN.get(cc).keySet());
+            Map<String, Decimal> w = new Map<String, Decimal>();
+            for (String name : names) {
+                Integer n = domN.containsKey(cc) && domN.get(cc).containsKey(name) ? domN.get(cc).get(name) : 0;
+                Integer right = domRight.containsKey(cc) && domRight.get(cc).containsKey(name) ? domRight.get(cc).get(name) : 0;
+                Decimal adj = (right + FOCUS_SHRINK * overall) / (n + FOCUS_SHRINK);
+                w.put(name, (1 + FOCUS_BOOST * (1 - adj)).setScale(2));
+            }
+            if (!w.isEmpty()) out.put(cc, w);
+        }
+        // Results from a failed exam replace the practice-history weights for that cert until the learner passes.
+        Map<String, Map<String, Decimal>> exam = examWeights(userIdOrNull(key), codes);
+        for (String cc : exam.keySet()) out.put(cc, exam.get(cc));
+        return out;
+    }
+
+    public static Map<String, Map<String, Decimal>> parseFocusWeights(String jsonText) {
+        Map<String, Map<String, Decimal>> out = new Map<String, Map<String, Decimal>>();
+        if (String.isBlank(jsonText)) return out;
+        try {
+            Map<String, Object> raw = (Map<String, Object>) JSON.deserializeUntyped(jsonText);
+            for (String cc : raw.keySet()) {
+                Map<String, Decimal> w = new Map<String, Decimal>();
+                Map<String, Object> domainWeights = (Map<String, Object>) raw.get(cc);
+                for (String d : domainWeights.keySet()) w.put(d, Decimal.valueOf(String.valueOf(domainWeights.get(d))));
+                out.put(cc, w);
+            }
+        } catch (Exception e) {
+            return new Map<String, Map<String, Decimal>>(); // a bad snapshot just turns focus off
+        }
+        return out;
+    }
+
+    private class WeightedItem implements Comparable {
+        Question__c q;
+        Double key;
+        public Integer compareTo(Object other) {
+            Double o = ((WeightedItem) other).key;
+            return key == o ? 0 : (key > o ? -1 : 1); // largest key first
+        }
+    }
+
+    /** Weighted random order (Efraimidis-Spirakis): a weight-3 domain comes up about three times as often as weight 1. */
+    private static void weightedShuffleRecords(List<Question__c> items, Map<String, Map<String, Decimal>> weights) {
+        List<WeightedItem> keyed = new List<WeightedItem>();
+        for (Question__c q : items) {
+            Decimal w = 1;
+            String code = q.Cert__r == null ? null : q.Cert__r.Cert_Code__c;
+            if (code != null && weights.containsKey(code) && q.Domain__c != null && weights.get(code).containsKey(q.Domain__c)) {
+                w = weights.get(code).get(q.Domain__c);
+            }
+            WeightedItem wi = new WeightedItem();
+            wi.q = q;
+            Double ww = w.doubleValue();
+            if (ww < 0.001) ww = 0.001;
+            wi.key = Math.pow(Math.random(), 1 / ww);
+            keyed.add(wi);
+        }
+        keyed.sort();
+        for (Integer i = 0; i < keyed.size(); i++) items[i] = keyed[i].q;
+    }
+
+    /**
+     * While a Practice session with weak-area focus is active on this cert: the weakest domain that has
+     * fewer than FOCUS_DOMAIN_READY unclaimed Ready questions (so the pool generates for it), or null.
+     */
+    public static String focusDomainNeeded(Id certId, String certCode) {
+        String likeTerm = '%;' + String.valueOf(certId) + ';%';
+        Map<String, Decimal> weakest = new Map<String, Decimal>();
+        for (Study_Session__c s : [
+            SELECT Domain_Weights_JSON__c FROM Study_Session__c
+            WHERE Status__c = :ACTIVE AND Mode__c = :MODE_PRACTICE AND Focus_Weak_Areas__c = true
+                AND Cert_Codes__c LIKE :likeTerm
+        ]) {
+            Map<String, Decimal> w = parseFocusWeights(s.Domain_Weights_JSON__c).get(certCode);
+            if (w == null) continue;
+            for (String d : w.keySet()) {
+                if (w.get(d) >= FOCUS_WEAK_WEIGHT && (!weakest.containsKey(d) || w.get(d) > weakest.get(d))) {
+                    weakest.put(d, w.get(d));
+                }
+            }
+        }
+        if (weakest.isEmpty()) return null;
+        Map<String, Integer> ready = new Map<String, Integer>();
+        for (AggregateResult ar : [
+            SELECT Domain__c d, COUNT(Id) n FROM Question__c
+            WHERE Cert__c = :certId AND Status__c = 'Ready' AND Study_Session__c = null
+            GROUP BY Domain__c
+        ]) {
+            ready.put((String) ar.get('d'), (Integer) ar.get('n'));
+        }
+        String best = null;
+        for (String d : weakest.keySet()) {
+            Integer have = ready.containsKey(d) ? ready.get(d) : 0;
+            if (have >= FOCUS_DOMAIN_READY) continue;
+            if (best == null || weakest.get(d) > weakest.get(best)) best = d;
+        }
+        return best;
+    }
+
+    /** One line for the session screen: the sections being emphasized. Null when focus is off. */
+    public static String focusNote(Study_Session__c s) {
+        if (s == null || s.Focus_Weak_Areas__c != true) return null;
+        Map<String, Decimal> all = new Map<String, Decimal>();
+        for (Map<String, Decimal> w : parseFocusWeights(s.Domain_Weights_JSON__c).values()) {
+            for (String d : w.keySet()) {
+                if (w.get(d) >= FOCUS_WEAK_WEIGHT && (!all.containsKey(d) || w.get(d) > all.get(d))) all.put(d, w.get(d));
+            }
+        }
+        if (all.isEmpty()) return 'Weak-area focus is on, but your earlier answers show no clearly weak sections yet.';
+        List<String> names = new List<String>(all.keySet());
+        for (Integer i = 0; i < names.size(); i++) {
+            for (Integer j = i + 1; j < names.size(); j++) {
+                if (all.get(names[j]) > all.get(names[i])) {
+                    String t = names[i];
+                    names[i] = names[j];
+                    names[j] = t;
+                }
+            }
+        }
+        List<String> top = new List<String>();
+        for (String n : names) {
+            if (top.size() >= 3) break;
+            top.add(n);
+        }
+        return 'Focusing on your weaker sections: ' + String.join(top, ', ') + '.';
     }
 
     private static Question__c lockAndClaim(Id sessionId, List<Question__c> candidates) {

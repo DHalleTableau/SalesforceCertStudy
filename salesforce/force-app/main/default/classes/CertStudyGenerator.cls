@@ -8,7 +8,8 @@
  * fallback.
  */
 public without sharing class CertStudyGenerator {
-    public static final Integer POOL_SIZE = 5;
+    /** Unclaimed Ready questions kept per cert. Raised from 5 so fast answerers do not drain the pool. */
+    public static final Integer POOL_SIZE = 8;
     public static final Integer MAX_DOMAINS = 12;
     public static final Integer MAX_GROUNDING_CHARS = 60000;
     public static final Integer AVOID_STEMS_LIMIT = 40;
@@ -40,7 +41,13 @@ public without sharing class CertStudyGenerator {
 
     /** Mixed pool, no per-user ramp: cycles 1-5 (same as worker.py). */
     public static Integer nextDifficulty(Integer total) {
-        return Math.mod(total, 5) + 1;
+        return nextDifficulty(total, 1);
+    }
+
+    /** Same rotation, restricted to minDifficulty..5 (minDifficulty 1 == the full 1-5 cycle). */
+    public static Integer nextDifficulty(Integer total, Integer minDifficulty) {
+        Integer m = Math.max(1, Math.min(5, minDifficulty == null ? 1 : minDifficulty));
+        return m + Math.mod(total, 6 - m);
     }
 
     /**

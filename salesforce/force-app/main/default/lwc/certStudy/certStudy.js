@@ -3,6 +3,16 @@ import listCerts from '@salesforce/apex/CertStudyController.listCerts';
 import getActiveSession from '@salesforce/apex/CertStudyController.getActiveSession';
 import startPractice from '@salesforce/apex/CertStudyController.startPractice';
 import nextQuestion from '@salesforce/apex/CertStudyController.nextQuestion';
+import retryGeneration from '@salesforce/apex/CertStudyController.retryGeneration';
+import getLastSelection from '@salesforce/apex/CertStudyController.getLastSelection';
+import getFocusableCerts from '@salesforce/apex/CertStudyController.getFocusableCerts';
+import getExamFocus from '@salesforce/apex/CertStudyController.getExamFocus';
+import previewSectionScores from '@salesforce/apex/CertStudyController.previewSectionScores';
+import saveSectionScores from '@salesforce/apex/CertStudyController.saveSectionScores';
+import getGoals from '@salesforce/apex/CertStudyController.getGoals';
+import saveGoal from '@salesforce/apex/CertStudyController.saveGoal';
+import removeGoal from '@salesforce/apex/CertStudyController.removeGoal';
+import recordGoalOutcome from '@salesforce/apex/CertStudyController.recordGoalOutcome';
 import submitAnswer from '@salesforce/apex/CertStudyController.submitAnswer';
 import getSummary from '@salesforce/apex/CertStudyController.getSummary';
 import startTest from '@salesforce/apex/CertStudyController.startTest';
@@ -22,11 +32,11 @@ import { RELEASES, UPCOMING } from './releaseNotes';
 import { ALL, certType, certArea, typeOptions as buildTypeOptions, areaOptions as buildAreaOptions } from './certCategories';
 
 const POLL_MS = 4000;
-const MAX_POLLS = 45; // ~3 minutes
+const MAX_POLLS = 90; // ~6 minutes
 
 // Shown in the banner/footer. Bump APP_VERSION and APP_RELEASED on each release.
-const APP_VERSION = 'v0.13.0';
-const APP_RELEASED = 'Nov 5, 2026';
+const APP_VERSION = 'v0.14.0';
+const APP_RELEASED = 'Nov 2026'; // set the exact date when v0.14.0 is published
 const OWNER_NAME = 'Daniel Halle';
 const OWNER_EMAIL = 'daniel.halle@salesforce.com';
 
@@ -40,6 +50,7 @@ export default class CertStudy extends LightningElement {
     view = 'loading'; // loading | select | prereq | question | feedback | waiting | summary | paused | testResult
     mode = 'practice'; // practice | test (selection screen)
     timerChoice = 'open'; // open | strict
+    minDifficulty = '1'; // practice only: '1'..'5'
     testResult;
     clockBase = 0; // elapsed seconds reported by the server
     clockReceivedAt = 0; // Date.now() when clockBase was received
@@ -66,6 +77,7 @@ export default class CertStudy extends LightningElement {
     summary;
     pollCount = 0;
     pollTimer;
+    waitMessage; // server's plain-language reason the next question is not ready yet
 
     // ------------------------------------------------------------ lifecycle
 
@@ -132,8 +144,18 @@ export default class CertStudy extends LightningElement {
 
     closeWhatsNew() {
         const back = this.whatsNewReturnView;
-        if (!back || back === 'select' || back === 'loading') this.showSelect();
+        if (!back || back === 'select' || back === 'loading') this.returnToSelect();
         else this.view = back;
+    }
+
+    /**
+     * Back to the picker from a side page (What's new, suggestions) without clearing the
+     * learner's mode, certs and prerequisite answers. Falls back to a full reset if the
+     * picker was never loaded.
+     */
+    returnToSelect() {
+        if (this.allCerts.length) this.view = 'select';
+        else this.showSelect();
     }
     get showHistoryButton() { return ['select', 'summary', 'testResult', 'recs'].includes(this.view) && !this.busy; }
     get showRecsButton() { return ['select', 'summary', 'testResult', 'history'].includes(this.view) && !this.busy; }
@@ -154,6 +176,25 @@ export default class CertStudy extends LightningElement {
         } catch (e) {
             this.earnedCodes = []; // the picker still works without it
         }
+        try {
+            this.lastSelection = await getLastSelection();
+        } catch (e) {
+            this.lastSelection = undefined; // the picker still works without it
+        }
+        try {
+            this.focusableCodes = await getFocusableCerts();
+        } catch (e) {
+            this.focusableCodes = []; // focus is simply unavailable
+        }
+        try {
+            this.examFocus = await getExamFocus();
+        } catch (e) {
+            this.examFocus = [];
+        }
+        this.focusTouched = false;
+        this.focusWeak = false;
+        this.goalNotice = undefined;
+        await this.refreshGoals();
         this.selectedCodes = [];
         this.prereqAnswers = {};
         this.pending = undefined;
@@ -176,6 +217,59 @@ export default class CertStudy extends LightningElement {
         ];
     }
 
+    get minDifficultyOptions() {
+        return [
+            { label: '1 — all difficulties (default)', value: '1' },
+            { label: '2', value: '2' },
+            { label: '3', value: '3' },
+            { label: '4', value: '4' },
+            { label: '5 — hardest only', value: '5' }
+        ];
+    }
+
+    handleMinDifficulty(event) {
+        this.minDifficulty = event.detail.value;
+    }
+
+    // Weak-area focus (Practice only): available for certs the learner has answered before.
+    focusableCodes = [];
+    focusWeak = false;
+
+    // Exam results entered after a failed exam: focus is pre-ticked for those certs until the learner unticks it.
+    examFocus = [];
+    focusTouched = false;
+
+    get canFocus() { return this.selectedCodes.some((c) => this.focusableCodes.includes(c)); }
+    get cannotFocus() { return !this.canFocus; }
+    get selectedExamFocus() { return this.examFocus.filter((x) => this.selectedCodes.includes(x.certCode)); }
+    get hasSelectedExamFocus() { return this.selectedExamFocus.length > 0; }
+    get focusChecked() {
+        if (!this.canFocus) return false;
+        return this.focusTouched ? this.focusWeak : this.focusWeak || this.hasSelectedExamFocus;
+    }
+    get examFocusNote() {
+        if (!this.hasSelectedExamFocus || !this.focusChecked) return '';
+        const parts = this.selectedExamFocus.map((x) =>
+            x.recordedLabel ? `${x.certName} (exam results from ${x.recordedLabel})` : x.certName
+        );
+        return `Focusing on your exam results for ${parts.join(', ')}, until you pass. Untick the box to practice without it.`;
+    }
+    get hasExamFocusNote() { return this.examFocusNote !== ''; }
+    get focusHelp() {
+        return this.canFocus
+            ? 'Asks more questions from the sections you have scored lowest in, based on your earlier practice and tests (or your exam results, if you entered them). Certs with no history are not affected.'
+            : 'Available once you have answered questions for one of the selected certifications.';
+    }
+    get sessionFocusNote() {
+        return this.inPractice && this.session && this.session.focusNote ? this.session.focusNote : '';
+    }
+
+    handleFocus(event) {
+        this.focusWeak = event.target.checked;
+        this.focusTouched = true;
+    }
+
+    get isPracticeMode() { return !this.isTestMode; }
     get isTestMode() { return this.mode === 'test'; }
     get startLabel() { return this.isTestMode ? 'Start test' : 'Start practice'; }
     get selectHelp() {
@@ -199,7 +293,7 @@ export default class CertStudy extends LightningElement {
         this.timerChoice = event.detail.value;
     }
 
-    hideRetiring = false;
+    hideRetiring = true; // hidden by default; the filter can be unticked
     typeFilter = ALL;
     areaFilter = ALL;
     typeFilterOptions = buildTypeOptions();
@@ -222,6 +316,230 @@ export default class CertStudy extends LightningElement {
         return n > 0 ? `Hide certs I've earned (${n})` : "Hide certs I've earned";
     }
 
+    // ------------------------------------------------ upcoming exams (study goals)
+
+    goals = [];
+    snoozedGoalIds = []; // "Ask me later": hidden until the next visit
+    goalNotice;          // one-time message after recording a result
+    goalCertCode = '';
+    goalDate = '';
+    goalError;
+
+    async refreshGoals() {
+        try {
+            this.goals = await getGoals();
+        } catch (e) {
+            this.goals = []; // the picker still works without goals
+        }
+    }
+
+    get isGoals() { return this.view === 'goals'; }
+
+    get currentGoals() { return this.goals.filter((g) => !g.overdue); }
+    get overdueGoals() { return this.goals.filter((g) => g.overdue && !this.snoozedGoalIds.includes(g.id)); }
+    get hasOverdue() { return this.overdueGoals.length > 0; }
+    get hasCurrentGoals() { return this.currentGoals.length > 0; }
+    get upcomingSelectLabel() { return `Select upcoming exams (${this.currentGoals.length})`; }
+
+    get goalRows() {
+        return this.goals.map((g) => {
+            let whenText = 'No date set';
+            if (g.daysLeft !== undefined && g.daysLeft !== null) {
+                if (g.daysLeft < 0) whenText = 'Date passed';
+                else if (g.daysLeft === 0) whenText = 'Today';
+                else if (g.daysLeft === 1) whenText = 'Tomorrow';
+                else whenText = `In ${g.daysLeft} days`;
+            }
+            return { ...g, whenText };
+        });
+    }
+    get hasGoalRows() { return this.goals.length > 0; }
+
+    /** Exams that can be added: real exams (not aggregates), not already earned, not already tracked. */
+    get goalCertOptions() {
+        const tracked = new Set(this.goals.map((g) => g.certCode));
+        return this.allCerts
+            .filter((c) => !c.isAggregate && !this.earnedCodes.includes(c.code) && !tracked.has(c.code))
+            .sort((a, b) => a.name.localeCompare(b.name))
+            .map((c) => ({ label: c.name, value: c.code }));
+    }
+    get cannotAddGoal() { return !this.goalCertCode || this.busy; }
+
+    selectUpcoming() {
+        const known = new Map(this.allCerts.map((c) => [c.code, c]));
+        let codes = this.currentGoals.map((g) => g.certCode).filter((c) => known.has(c));
+        if (this.isTestMode) codes = codes.slice(0, 1); // a test is one cert at a time
+        this.selectedCodes = codes;
+        this.prereqAnswers = {};
+    }
+
+    async showGoals() {
+        this.goalError = undefined;
+        this.goalNotice = undefined;
+        if (!this.allCerts.length) {
+            try { this.allCerts = await listCerts(); } catch (e) { /* options just stay empty */ }
+        }
+        this.view = 'goals';
+    }
+
+    closeGoals() { this.returnToSelect(); }
+
+    handleGoalCert(event) { this.goalCertCode = event.detail.value; }
+    handleGoalDate(event) { this.goalDate = event.detail.value; }
+
+    async addGoal() {
+        this.goalError = undefined;
+        this.busy = true;
+        try {
+            this.goals = await saveGoal({ certCode: this.goalCertCode, examDate: this.goalDate || null });
+            this.goalCertCode = '';
+            this.goalDate = '';
+        } catch (e) {
+            this.goalError = this.messageOf(e);
+        } finally {
+            this.busy = false;
+        }
+    }
+
+    async changeGoalDate(event) {
+        this.goalError = undefined;
+        try {
+            this.goals = await saveGoal({ certCode: event.target.dataset.code, examDate: event.detail.value || null });
+        } catch (e) {
+            this.goalError = this.messageOf(e);
+        }
+    }
+
+    async removeGoalRow(event) {
+        this.goalError = undefined;
+        try {
+            this.goals = await removeGoal({ goalId: event.target.dataset.id });
+        } catch (e) {
+            this.goalError = this.messageOf(e);
+        }
+    }
+
+    async markGoalPassed(event) {
+        await this.recordOutcome(event.target.dataset.id, true);
+    }
+
+    async markGoalNotPassed(event) {
+        await this.recordOutcome(event.target.dataset.id, false);
+    }
+
+    snoozeGoal(event) {
+        this.snoozedGoalIds = [...this.snoozedGoalIds, event.target.dataset.id];
+    }
+
+    async recordOutcome(goalId, passed) {
+        const goal = this.goals.find((g) => g.id === goalId);
+        try {
+            this.goals = await recordGoalOutcome({ goalId, passed });
+            if (passed) {
+                this.earnedCodes = await getEarnedCerts();
+                this.goalNotice = `Congratulations on passing${goal ? ' ' + goal.certName : ''}! It is now marked as earned.`;
+            } else {
+                this.goalNotice = `Thanks for letting us know${goal ? ' about ' + goal.certName : ''}. When you book a retake, add it again under Manage upcoming exams.`;
+                this.openScores(goalId, goal ? goal.certName : '');
+            }
+        } catch (e) {
+            this.fail(e);
+        }
+    }
+
+    // ------------------------------------------- exam results (after a failed exam)
+
+    scoresGoalId;
+    scoresCertName = '';
+    scoresText = '';
+    scoresPreview;      // { certName, passingScore, passingEstimated, domains, rows }
+    scoresRows = [];    // editable rows: { key, name, pct, domain }
+    scoresError;
+    scoresDone;         // summary shown after saving
+
+    get isScores() { return this.view === 'scores'; }
+    get scoresCertLabel() { return this.scoresCertName ? ` (${this.scoresCertName})` : ''; }
+    get hasScoresPreview() { return !!this.scoresPreview; }
+    get noScoresPreview() { return !this.scoresPreview; }
+    get cannotPreviewScores() { return this.busy || !(this.scoresText || '').trim(); }
+    get cannotSaveScores() { return this.busy || this.scoresRows.length === 0; }
+    get scoresPassNote() {
+        const p = this.scoresPreview;
+        if (!p) return '';
+        return p.passingEstimated
+            ? `Pass mark not on file for this exam, so ${p.passingScore}% is assumed.`
+            : `Pass mark: ${p.passingScore}%.`;
+    }
+    get scoreDomainOptions() {
+        const none = { label: '(not one of these sections)', value: '' };
+        const d = this.scoresPreview ? this.scoresPreview.domains : [];
+        return [none, ...d.map((x) => ({ label: x, value: x }))];
+    }
+
+    openScores(goalId, certName) {
+        this.scoresGoalId = goalId;
+        this.scoresCertName = certName;
+        this.scoresText = '';
+        this.scoresPreview = undefined;
+        this.scoresRows = [];
+        this.scoresError = undefined;
+        this.scoresDone = undefined;
+        this.view = 'scores';
+    }
+
+    handleScoresText(event) { this.scoresText = event.target.value; }
+
+    async previewScoresClick() {
+        this.scoresError = undefined;
+        this.busy = true;
+        try {
+            const p = await previewSectionScores({ goalId: this.scoresGoalId, text: this.scoresText });
+            if (!p.rows.length) {
+                this.scoresError = 'No section scores found. Paste lines like "Prompt Engineering: 83%".';
+                this.scoresPreview = undefined;
+            } else {
+                this.scoresPreview = p;
+                this.scoresRows = p.rows.map((r, i) => ({ key: 'r' + i, name: r.name, pct: r.pct, domain: r.domain || '' }));
+            }
+        } catch (e) {
+            this.scoresError = this.messageOf(e);
+        } finally {
+            this.busy = false;
+        }
+    }
+
+    handleScoreDomain(event) {
+        const key = event.target.dataset.key;
+        const value = event.detail.value;
+        this.scoresRows = this.scoresRows.map((r) => (r.key === key ? { ...r, domain: value } : r));
+    }
+
+    editScores() {
+        this.scoresPreview = undefined;
+        this.scoresRows = [];
+        this.scoresError = undefined;
+    }
+
+    async saveScoresClick() {
+        this.scoresError = undefined;
+        this.busy = true;
+        try {
+            const rows = this.scoresRows.map((r) => ({ name: r.name, pct: r.pct, domain: r.domain || null }));
+            this.scoresDone = await saveSectionScores({ goalId: this.scoresGoalId, rowsJson: JSON.stringify(rows) });
+        } catch (e) {
+            this.scoresError = this.messageOf(e);
+        } finally {
+            this.busy = false;
+        }
+    }
+
+    closeScores() { this.showSelect(); }
+
+    /** Plain message from an Apex or JS error, for inline display. */
+    messageOf(e) {
+        return (e && e.body && e.body.message) || (e && e.message) || 'Something went wrong. Please try again.';
+    }
+
     async toggleEarned(event) {
         const code = event.target.dataset.code;
         const nowEarned = !this.earnedCodes.includes(code);
@@ -233,6 +551,7 @@ export default class CertStudy extends LightningElement {
         }
         try {
             this.earnedCodes = await setCertEarned({ certCode: code, earned: nowEarned });
+            if (nowEarned) await this.refreshGoals(); // the server settles an open goal for a cert you now hold
         } catch (e) {
             this.earnedCodes = before;
             this.fail(e);
@@ -302,6 +621,46 @@ export default class CertStudy extends LightningElement {
         }
     }
 
+    deselectAll() {
+        this.selectedCodes = [];
+        this.prereqAnswers = {};
+    }
+
+    // Last session's picks, so "Select last session" can restore them in one click.
+    lastSelection;
+
+    /** Last session's certs that still exist in the picker list. */
+    get lastSelectionCodes() {
+        const l = this.lastSelection;
+        if (!l || !l.mode || !l.certCodes) return [];
+        const known = new Map(this.allCerts.map((c) => [c.code, c]));
+        const codes = l.certCodes.filter((c) => known.has(c));
+        // A test is one cert at a time, and never an aggregate.
+        return l.mode === 'test' ? codes.filter((c) => !known.get(c).isAggregate).slice(0, 1) : codes;
+    }
+
+    get hasLastSelection() { return this.lastSelectionCodes.length > 0; }
+
+    get lastSelectionLabel() {
+        const n = this.lastSelectionCodes.length;
+        const l = this.lastSelection;
+        const mode = l && l.mode === 'test' ? 'Test' : 'Practice';
+        return `Select last session (${mode}, ${n} cert${n === 1 ? '' : 's'})`;
+    }
+
+    selectLastSession() {
+        const l = this.lastSelection;
+        if (!l) return;
+        this.mode = l.mode === 'test' ? 'test' : 'practice';
+        if (this.mode === 'test') {
+            this.timerChoice = l.timerMode === 'Strict' ? 'strict' : 'open';
+        } else {
+            this.minDifficulty = String(l.minDifficulty || 1);
+        }
+        this.selectedCodes = [...this.lastSelectionCodes];
+        this.prereqAnswers = {};
+    }
+
     removeCert(event) {
         const code = event.target.name;
         this.selectedCodes = this.selectedCodes.filter((c) => c !== code);
@@ -317,7 +676,9 @@ export default class CertStudy extends LightningElement {
         try {
             const v = await startPractice({
                 certCodes: this.selectedCodes,
-                prereqAnswersJson: JSON.stringify(this.prereqAnswers)
+                prereqAnswersJson: JSON.stringify(this.prereqAnswers),
+                minDifficulty: parseInt(this.minDifficulty, 10) || 1,
+                focusWeakAreas: this.focusChecked
             });
             if (v.error) {
                 this.error = v.error;
@@ -387,6 +748,7 @@ export default class CertStudy extends LightningElement {
             this.view = 'question';
         } else {
             this.question = undefined;
+            this.waitMessage = v.waitMessage;
             this.view = 'waiting';
             this.startPolling();
         }
@@ -757,6 +1119,7 @@ export default class CertStudy extends LightningElement {
                 } else if (v.question) {
                     this.applySession(v);
                 } else if (this.pollCount < MAX_POLLS) {
+                    this.waitMessage = v.waitMessage;
                     this.schedulePoll();
                 }
             } catch (e) {
@@ -770,7 +1133,19 @@ export default class CertStudy extends LightningElement {
         this.pollTimer = undefined;
     }
 
-    retryPolling() {
+    /** "Check again": also asks the server to clear any failure cooldown or stalled lock and restart generation. */
+    async retryPolling() {
+        this.stopPolling();
+        try {
+            const v = await retryGeneration();
+            if (v.hasActiveSession && v.question) {
+                this.applySession(v);
+                return;
+            }
+            this.waitMessage = v.waitMessage;
+        } catch (e) {
+            // Fall through: polling below reports any persistent error.
+        }
         this.startPolling();
     }
 
@@ -1052,7 +1427,7 @@ export default class CertStudy extends LightningElement {
     closeContribute() {
         this.resetContributeForm();
         const back = this.contribReturnView;
-        if (back === 'select' || !back) this.showSelect();
+        if (back === 'select' || !back) this.returnToSelect();
         else this.view = back;
     }
 

@@ -7,6 +7,8 @@ public with sharing class CertStudy_StartSession {
         public String prerequisiteAnswers;
         @InvocableVariable(label='User Key' description='Optional. Leave blank to use the current user. Only set this when an interface supplies its own learner id, such as a Slack user ID.')
         public String userKey;
+        @InvocableVariable(label='Minimum Difficulty' description='Optional. 1 (easiest) to 5 (hardest): only ask questions at or above this difficulty. Leave blank for 1 (all difficulties).')
+        public Integer minDifficulty;
     }
 
     public class Result {
@@ -19,7 +21,7 @@ public with sharing class CertStudy_StartSession {
         List<Result> results = new List<Result>();
         for (Request r : requests) {
             Result res = new Result();
-            res.message = CertStudyService.startSession(r.userKey, r.certCodes, r.prerequisiteAnswers);
+            res.message = CertStudyService.startSession(r.userKey, r.certCodes, r.prerequisiteAnswers, r.minDifficulty);
             results.add(res);
         }
         return results;

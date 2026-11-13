@@ -73,6 +73,44 @@ private class CertStudyControllerTest {
     }
 
     @IsTest
+    static void examResultsFlowThroughTheController() {
+        List<CertStudyController.GoalView> goals = CertStudyController.saveGoal('AI-201', String.valueOf(Date.today().addDays(-1)));
+        CertStudyController.recordGoalOutcome(goals[0].id, false);
+        Assert.isTrue(CertStudyController.getExamFocus().isEmpty(), 'nothing entered yet');
+
+        CertStudyController.ScorePreviewView p = CertStudyController.previewSectionScores(
+            goals[0].id, 'Prompting: 50%\nAI Agents: 90%\nbogus line'
+        );
+        Assert.areEqual(72, p.passingScore);
+        Assert.areEqual(2, p.rows.size());
+        Assert.areEqual('Prompting', p.rows[0].domain);
+        Assert.areEqual('AI Agents', p.rows[1].domain);
+
+        String rowsJson = JSON.serialize(p.rows);
+        String msg = CertStudyController.saveSectionScores(goals[0].id, rowsJson);
+        Assert.isTrue(msg.contains('Prompting'), msg);
+
+        List<CertStudyController.ExamFocusView> focus = CertStudyController.getExamFocus();
+        Assert.areEqual(1, focus.size());
+        Assert.areEqual('AI-201', focus[0].certCode);
+        Assert.isNotNull(focus[0].recordedLabel);
+        Assert.isTrue(CertStudyController.getFocusableCerts().contains('AI-201'), 'exam results make focus available');
+
+        try {
+            CertStudyController.saveSectionScores(goals[0].id, '[]');
+            Assert.fail('rows required');
+        } catch (AuraHandledException e) {
+            Assert.isTrue(e.getMessage().contains('at least one'));
+        }
+        try {
+            CertStudyController.previewSectionScores('bogus', 'x: 5%');
+            Assert.fail('unknown goal');
+        } catch (AuraHandledException e) {
+            Assert.isTrue(e.getMessage().contains('not found'));
+        }
+    }
+
+    @IsTest
     static void earnedCertRejectsUnknownCert() {
         try {
             CertStudyController.setCertEarned('NOPE-999', true);
@@ -85,8 +123,8 @@ private class CertStudyControllerTest {
     @IsTest
     static void questionReportsAreValidatedScopedAndDeduplicated() {
         CertStudyLlm.instance = new NoopLlm();
-        CertStudyController.SessionView v = CertStudyController.startPractice(new List<String>{ 'AI-201' }, null);
-        v = CertStudyController.startPractice(new List<String>{ 'AI-201' }, '{"AI-201": false}');
+        CertStudyController.SessionView v = CertStudyController.startPractice(new List<String>{ 'AI-201' }, null, null, null);
+        v = CertStudyController.startPractice(new List<String>{ 'AI-201' }, '{"AI-201": false}', null, null);
         String qid = v.question.id;
 
         // Validation
@@ -201,7 +239,7 @@ private class CertStudyControllerTest {
         Assert.areEqual('Prep trailmix', CertStudyService.studyLinksFor(new Set<Id>{ ai.Id }, null)[0].Title__c);
 
         CertStudyLlm.instance = new NoopLlm();
-        CertStudyController.startPractice(new List<String>{ 'AI-201' }, '{"AI-201": false}');
+        CertStudyController.startPractice(new List<String>{ 'AI-201' }, '{"AI-201": false}', null, null);
         CertStudyController.submitAnswer(new List<String>{ 'b' });
         CertStudyController.SummaryView s = CertStudyController.getSummary(true);
         Assert.areEqual(2, s.studyLinks.size(), 'practice summary shows the cert\'s links');
@@ -223,10 +261,10 @@ private class CertStudyControllerTest {
 
         Assert.isFalse(CertStudyController.getActiveSession().hasActiveSession);
 
-        CertStudyController.SessionView v = CertStudyController.startPractice(new List<String>{ 'AI-201' }, null);
+        CertStudyController.SessionView v = CertStudyController.startPractice(new List<String>{ 'AI-201' }, null, null, null);
         Assert.areEqual('AI-201', v.pendingCode, 'prerequisite prompt first');
 
-        v = CertStudyController.startPractice(new List<String>{ 'AI-201' }, '{"AI-201": false}');
+        v = CertStudyController.startPractice(new List<String>{ 'AI-201' }, '{"AI-201": false}', null, null);
         Assert.isTrue(v.hasActiveSession);
         Assert.areEqual(72, v.certs[0].passingScore);
         Assert.isNotNull(v.question);
@@ -381,10 +419,10 @@ private class CertStudyControllerTest {
         CertStudyController.SessionView v1;
         CertStudyController.SessionView v2;
         System.runAs(u1) {
-            v1 = CertStudyController.startPractice(new List<String>{ 'AI-201' }, '{"AI-201": false}');
+            v1 = CertStudyController.startPractice(new List<String>{ 'AI-201' }, '{"AI-201": false}', null, null);
         }
         System.runAs(u2) {
-            v2 = CertStudyController.startPractice(new List<String>{ 'AI-201' }, '{"AI-201": false}');
+            v2 = CertStudyController.startPractice(new List<String>{ 'AI-201' }, '{"AI-201": false}', null, null);
         }
         Assert.areNotEqual(v1.question.id, v2.question.id, 'two learners never get the same question row');
         System.runAs(u1) {
@@ -426,7 +464,7 @@ private class CertStudyControllerTest {
     // (In the app each click is its own transaction.)
 
     private static void practiceTwoAnswers() {
-        CertStudyController.startPractice(new List<String>{ 'AI-201' }, '{"AI-201": false}');
+        CertStudyController.startPractice(new List<String>{ 'AI-201' }, '{"AI-201": false}', null, null);
         CertStudyController.submitAnswer(new List<String>{ 'B' });
         CertStudyController.nextQuestion();
         CertStudyController.submitAnswer(new List<String>{ 'A' });
@@ -504,9 +542,83 @@ private class CertStudyControllerTest {
     }
 
     @IsTest
+    static void lastSelectionRemembersPracticeThenTest() {
+        CertStudyLlm.instance = new NoopLlm();
+        Assert.isNull(CertStudyController.getLastSelection().mode, 'no earlier session');
+        Assert.isTrue(CertStudyController.getLastSelection().certCodes.isEmpty());
+
+        CertStudyController.startPractice(new List<String>{ 'AI-201' }, '{"AI-201": false}', 3, null);
+        CertStudyController.LastSelectionView p = CertStudyController.getLastSelection();
+        Assert.areEqual('practice', p.mode);
+        Assert.areEqual(new List<String>{ 'AI-201' }, p.certCodes);
+        Assert.areEqual(3, p.minDifficulty);
+
+        // Started_At__c only has second resolution, so make the ordering unambiguous.
+        update new Study_Session__c(
+            Id = [SELECT Id FROM Study_Session__c LIMIT 1].Id,
+            Started_At__c = DateTime.now().addHours(-1)
+        );
+        CertStudyController.startTest('AI-201', true);
+        CertStudyController.LastSelectionView t = CertStudyController.getLastSelection();
+        Assert.areEqual('test', t.mode, 'the most recent session wins');
+        Assert.areEqual('Strict', t.timerMode);
+        Assert.areEqual(new List<String>{ 'AI-201' }, t.certCodes);
+    }
+
+    @IsTest
+    static void retryGenerationReturnsTheActiveSession() {
+        CertStudyLlm.instance = new NoopLlm();
+        Assert.isFalse(CertStudyController.retryGeneration().hasActiveSession, 'no session yet');
+        CertStudyController.startPractice(new List<String>{ 'AI-201' }, '{"AI-201": false}', null, null);
+        update new Cert__c(
+            Id = [SELECT Id FROM Cert__c WHERE Cert_Code__c = 'AI-201'].Id,
+            Last_Failure_At__c = DateTime.now()
+        );
+        CertStudyController.SessionView v = CertStudyController.retryGeneration();
+        Assert.isTrue(v.hasActiveSession);
+        Assert.isNull([SELECT Last_Failure_At__c FROM Cert__c WHERE Cert_Code__c = 'AI-201'].Last_Failure_At__c, 'cooldown cleared');
+    }
+
+    @IsTest
+    static void goalWrappersParseDatesAndShowCountdown() {
+        Assert.isTrue(CertStudyController.getGoals().isEmpty());
+        Date d = Date.today().addDays(5);
+        List<CertStudyController.GoalView> views = CertStudyController.saveGoal('AI-201', String.valueOf(d));
+        Assert.areEqual(1, views.size());
+        Assert.areEqual(String.valueOf(d), views[0].examDate);
+        Assert.areEqual(5, views[0].daysLeft);
+        Assert.isFalse(views[0].overdue);
+        Assert.isNotNull(views[0].examDateLabel);
+
+        views = CertStudyController.saveGoal('AI-201', null);
+        Assert.isNull(views[0].examDate);
+        Assert.isNull(views[0].daysLeft);
+
+        try {
+            CertStudyController.saveGoal('AI-201', 'not a date');
+            Assert.fail('expected an error');
+        } catch (AuraHandledException e) {
+            Assert.isNotNull(e.getMessage());
+        }
+
+        views = CertStudyController.saveGoal('AI-201', String.valueOf(Date.today().addDays(-1)));
+        Assert.isTrue(views[0].overdue);
+        views = CertStudyController.recordGoalOutcome(views[0].id, true);
+        Assert.isTrue(views.isEmpty());
+        Assert.areEqual(new List<String>{ 'AI-201' }, CertStudyController.getEarnedCerts(), 'passing marks it earned');
+
+        try {
+            CertStudyController.removeGoal('not an id');
+            Assert.fail('expected an error');
+        } catch (AuraHandledException e) {
+            Assert.isTrue(e.getMessage().contains('not found'));
+        }
+    }
+
+    @IsTest
     static void errorsAndFallbacks() {
         CertStudyLlm.instance = new NoopLlm();
-        Assert.isNotNull(CertStudyController.startPractice(new List<String>{ 'NOPE' }, null).error);
+        Assert.isNotNull(CertStudyController.startPractice(new List<String>{ 'NOPE' }, null, null, null).error);
         Assert.isFalse(CertStudyController.getSummary(false).hasSession);
         Assert.isTrue(CertStudyController.splitFeedback('free text without structure').isEmpty());
         Assert.areEqual('x', CertStudyController.splitFeedback('**C. Opt** -- Correct: x').get('C'));

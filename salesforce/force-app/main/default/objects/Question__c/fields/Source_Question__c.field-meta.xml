@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>Source_Question__c</fullName>
+    <description>Set on a copy of a question that another learner already answered and that was reused when the pool ran dry. Points at the original, so a learner never gets the same question twice.</description>
+    <label>Source Question</label>
+    <referenceTo>Question__c</referenceTo>
+    <relationshipLabel>Reused Copies</relationshipLabel>
+    <relationshipName>Reused_Copies</relationshipName>
+    <deleteConstraint>SetNull</deleteConstraint>
+    <required>false</required>
+    <type>Lookup</type>
+</CustomField>

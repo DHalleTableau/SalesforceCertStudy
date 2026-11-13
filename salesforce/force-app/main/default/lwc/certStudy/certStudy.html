@@ -53,6 +53,22 @@
 
             <!-- choose certifications -->
             <template lwc:if={isSelect}>
+                <template lwc:if={goalNotice}>
+                    <div class="slds-box slds-theme_shade slds-m-bottom_small">{goalNotice}</div>
+                </template>
+                <template for:each={overdueGoals} for:item="g">
+                    <div key={g.id} class="slds-box slds-theme_shade slds-m-bottom_small">
+                        <p class="slds-m-bottom_x-small">
+                            Your <strong>{g.certName}</strong> exam date ({g.examDateLabel}) has passed. Did you pass?
+                        </p>
+                        <lightning-button variant="brand" label="Yes, I passed" data-id={g.id}
+                            onclick={markGoalPassed}></lightning-button>
+                        <lightning-button label="No, not this time" data-id={g.id} onclick={markGoalNotPassed}
+                            class="slds-m-left_x-small"></lightning-button>
+                        <lightning-button variant="base" label="Ask me later" data-id={g.id} onclick={snoozeGoal}
+                            class="slds-m-left_x-small"></lightning-button>
+                    </div>
+                </template>
                 <lightning-radio-group name="mode" label="Mode" options={modeOptions} value={mode}
                     onchange={handleMode} class="slds-m-bottom_small"></lightning-radio-group>
                 <template lwc:if={isTestMode}>
@@ -64,7 +80,22 @@
                         and the clock only runs while a question is on screen.
                     </p>
                 </template>
+                <template lwc:if={isPracticeMode}>
+                    <lightning-combobox name="minDifficulty" label="Minimum difficulty"
+                        options={minDifficultyOptions} value={minDifficulty} onchange={handleMinDifficulty}
+                        field-level-help="Questions are rated 1 (easiest) to 5 (hardest). Higher minimums may take longer to start while harder questions are generated."
+                        class="slds-m-bottom_small"></lightning-combobox>
+                    <lightning-input type="checkbox" label="Focus on my weaker sections" checked={focusChecked}
+                        disabled={cannotFocus} onchange={handleFocus}></lightning-input>
+                    <template lwc:if={hasExamFocusNote}>
+                        <p class="slds-m-bottom_x-small">{examFocusNote}</p>
+                    </template>
+                    <p class="slds-text-color_weak slds-m-bottom_small">{focusHelp}</p>
+                </template>
                 <p class="slds-text-body_regular slds-m-bottom_small">{selectHelp}</p>
+                <p class="slds-text-color_weak slds-m-bottom_small">
+                    Works on your phone too. Start here and pick up where you left off on any device.
+                </p>
                 <lightning-input type="search" label="Search certifications" value={filterText}
                     onchange={handleFilter} class="slds-m-bottom_x-small"></lightning-input>
                 <div class="slds-grid slds-wrap slds-gutters_x-small slds-m-bottom_x-small">
@@ -87,12 +118,27 @@
                             onchange={handleHideEarned}></lightning-input>
                     </div>
                 </div>
+                <div class="slds-m-bottom_x-small">
+                    <template lwc:if={hasCurrentGoals}>
+                        <lightning-button variant="base" label={upcomingSelectLabel} onclick={selectUpcoming}
+                            class="slds-m-right_small"></lightning-button>
+                    </template>
+                    <lightning-button variant="base" label="Manage upcoming exams" onclick={showGoals}></lightning-button>
+                </div>
+                <template lwc:if={hasLastSelection}>
+                    <div class="slds-m-bottom_x-small">
+                        <lightning-button variant="base" label={lastSelectionLabel}
+                            onclick={selectLastSession}></lightning-button>
+                    </div>
+                </template>
                 <template lwc:if={selectedCount}>
                     <div class="slds-m-bottom_small">
                         <template for:each={selectedCerts} for:item="c">
                             <lightning-pill key={c.code} label={c.name} name={c.code} onremove={removeCert}
                                 class="slds-m-right_xx-small"></lightning-pill>
                         </template>
+                        <lightning-button variant="base" label="Deselect all" onclick={deselectAll}
+                            class="slds-m-left_x-small"></lightning-button>
                     </div>
                 </template>
                 <div class="cert-list slds-box slds-box_x-small">
@@ -151,6 +197,9 @@
                         </template>
                     </div>
                 </div>
+                <template lwc:if={sessionFocusNote}>
+                    <p class="slds-text-color_weak slds-m-bottom_small">{sessionFocusNote}</p>
+                </template>
             </template>
 
             <!-- paused test: question hidden -->
@@ -285,6 +334,9 @@
                 </template>
                 <template lwc:if={pollGaveUp}>
                     <p class="slds-m-bottom_small">Questions are taking longer than usual to generate.</p>
+                    <template lwc:if={waitMessage}>
+                        <p class="slds-text-color_weak slds-m-bottom_small">{waitMessage}</p>
+                    </template>
                     <lightning-button label="Check again" onclick={retryPolling}></lightning-button>
                 </template>
                 <template lwc:else>
@@ -295,6 +347,11 @@
                             <template lwc:if={inTest}> The test clock is stopped while you wait.</template>
                         </p>
                     </div>
+                    <template lwc:if={waitMessage}>
+                        <p class="slds-text-color_weak slds-m-top_small">{waitMessage}</p>
+                    </template>
+                    <lightning-button variant="base" label="Check again" onclick={retryPolling}
+                        class="slds-m-top_x-small"></lightning-button>
                 </template>
             </template>
 
@@ -469,6 +526,102 @@
                         <lightning-button label="Cancel" onclick={closeContribute}></lightning-button>
                     </div>
                 </template>
+            </template>
+
+            <!-- exam results after a failed exam -->
+            <template lwc:if={isScores}>
+                <p class="slds-text-heading_medium slds-m-bottom_x-small">Your exam results</p>
+                <template lwc:if={scoresDone}>
+                    <div class="slds-box slds-theme_shade slds-m-bottom_small">{scoresDone}</div>
+                    <lightning-button variant="brand" label="Back to practice" onclick={closeScores}></lightning-button>
+                </template>
+                <template lwc:else>
+                    <p class="slds-text-color_weak slds-m-bottom_small">
+                        Sorry this one did not go your way{scoresCertLabel}. Paste the section-level scores from your exam
+                        report and practice will focus on the sections below the pass mark until you pass. You can skip this.
+                    </p>
+                    <template lwc:if={scoresError}>
+                        <div class="slds-text-color_error slds-m-bottom_small">{scoresError}</div>
+                    </template>
+                    <template lwc:if={noScoresPreview}>
+                        <lightning-textarea label="Section scores" value={scoresText} onchange={handleScoresText}
+                            placeholder="Prompt Engineering: 83%&#10;Data 360 Fundamentals: 58%"
+                            class="slds-m-bottom_small"></lightning-textarea>
+                        <lightning-button variant="brand" label="Preview" onclick={previewScoresClick}
+                            disabled={cannotPreviewScores}></lightning-button>
+                        <lightning-button label="Skip" onclick={closeScores} class="slds-m-left_small"></lightning-button>
+                    </template>
+                    <template lwc:if={hasScoresPreview}>
+                        <p class="slds-m-bottom_x-small">{scoresPassNote} Check that each line matches the right section.</p>
+                        <template for:each={scoresRows} for:item="r">
+                            <div key={r.key} class="slds-grid slds-grid_vertical-align-end slds-m-bottom_x-small">
+                                <div class="slds-col slds-size_1-of-3">{r.name}: <b>{r.pct}%</b></div>
+                                <div class="slds-col slds-size_2-of-3">
+                                    <lightning-combobox label="Matches section" variant="label-hidden" data-key={r.key}
+                                        options={scoreDomainOptions} value={r.domain}
+                                        onchange={handleScoreDomain}></lightning-combobox>
+                                </div>
+                            </div>
+                        </template>
+                        <div class="slds-m-top_small">
+                            <lightning-button variant="brand" label="Save and focus on these" onclick={saveScoresClick}
+                                disabled={cannotSaveScores}></lightning-button>
+                            <lightning-button label="Edit" onclick={editScores} class="slds-m-left_small"></lightning-button>
+                            <lightning-button label="Skip" onclick={closeScores} class="slds-m-left_small"></lightning-button>
+                        </div>
+                    </template>
+                </template>
+            </template>
+
+            <!-- my upcoming exams -->
+            <template lwc:if={isGoals}>
+                <p class="slds-text-heading_medium slds-m-bottom_x-small">My upcoming exams</p>
+                <p class="slds-text-color_weak slds-m-bottom_small">
+                    Add the exams you are studying for, with an optional date. On the picker, "Select upcoming exams"
+                    picks them for you. After the date we will ask whether you passed.
+                </p>
+                <template lwc:if={goalError}>
+                    <p class="slds-text-color_error slds-m-bottom_small">{goalError}</p>
+                </template>
+                <template lwc:if={hasGoalRows}>
+                    <div class="slds-box slds-box_x-small slds-m-bottom_small">
+                        <template for:each={goalRows} for:item="g">
+                            <div key={g.id} class="slds-grid slds-wrap slds-grid_vertical-align-center slds-p-vertical_xx-small">
+                                <div class="slds-col slds-size_1-of-1 slds-medium-size_5-of-12">
+                                    <strong>{g.certName}</strong>
+                                    <div class="slds-text-color_weak slds-text-body_small">{g.whenText}</div>
+                                </div>
+                                <div class="slds-col slds-size_1-of-1 slds-medium-size_4-of-12">
+                                    <lightning-input type="date" label="Exam date" variant="label-hidden"
+                                        value={g.examDate} data-code={g.certCode} onchange={changeGoalDate}></lightning-input>
+                                </div>
+                                <div class="slds-col slds-size_1-of-1 slds-medium-size_3-of-12 slds-text-align_right">
+                                    <lightning-button variant="base" label="Remove" data-id={g.id}
+                                        onclick={removeGoalRow}></lightning-button>
+                                </div>
+                            </div>
+                        </template>
+                    </div>
+                </template>
+                <template lwc:else>
+                    <p class="slds-m-bottom_small">You are not tracking any exams yet.</p>
+                </template>
+                <div class="slds-grid slds-wrap slds-gutters_x-small slds-grid_vertical-align-end slds-m-bottom_small">
+                    <div class="slds-col slds-size_1-of-1 slds-medium-size_6-of-12">
+                        <lightning-combobox name="goalCert" label="Add an exam" value={goalCertCode}
+                            options={goalCertOptions} placeholder="Choose a certification"
+                            onchange={handleGoalCert}></lightning-combobox>
+                    </div>
+                    <div class="slds-col slds-size_1-of-1 slds-medium-size_3-of-12">
+                        <lightning-input type="date" label="Exam date (optional)" value={goalDate}
+                            onchange={handleGoalDate}></lightning-input>
+                    </div>
+                    <div class="slds-col slds-size_1-of-1 slds-medium-size_3-of-12">
+                        <lightning-button variant="brand" label="Add" onclick={addGoal}
+                            disabled={cannotAddGoal}></lightning-button>
+                    </div>
+                </div>
+                <lightning-button label="Back" onclick={closeGoals}></lightning-button>
             </template>
 
             <!-- what's new (release log) -->

@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>Focus_Weak_Areas__c</fullName>
+    <description>Practice mode: ask more questions from the learner's weakest sections (per Domain_Weights_JSON__c). Never used in Test mode.</description>
+    <label>Focus Weak Areas</label>
+    <defaultValue>false</defaultValue>
+    <type>Checkbox</type>
+</CustomField>
