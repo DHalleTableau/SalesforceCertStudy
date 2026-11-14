@@ -6,6 +6,8 @@
 export const UPCOMING = [
     'Exam-matched question formats: each certification will use the answer formats of its real exam, such as pick one of three, pick one of four, or pick two.',
     'More licensing and formula questions: edition and plan comparison scenarios (which plan solves which problem) and formula and filter logic, for the certifications where they show up on the exam.',
+    'Study reminders: get an email (Slack later) on a schedule you choose, with more reminders as your exam date gets closer and a sample question from your weakest sections.',
+    'Practice in Slack: run a practice session for one certification right inside Slack.',
     'Score trends across attempts: if you take an exam more than once, see how each section changed from one attempt to the next.',
     'A personal stats dashboard: your scores over time, by certification and section, and how close you are to passing.',
     'Non-Salesforce certifications, starting with AI certifications that are useful at work.',
