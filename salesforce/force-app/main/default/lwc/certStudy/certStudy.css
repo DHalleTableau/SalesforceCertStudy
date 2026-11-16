@@ -293,3 +293,9 @@
 .study-links a {
     font-weight: 600;
 }
+
+.scores-box {
+    min-height: 16rem;
+    resize: vertical;
+    font-family: inherit;
+}

@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>Delivered_Questions__c</fullName>
+    <description>Questions shown in a real sitting, including unscored ones (for example 65 when 60 are scored). Blank = scored questions plus 5.</description>
+    <label>Delivered Questions</label>
+    <precision>3</precision>
+    <scale>0</scale>
+    <required>false</required>
+    <type>Number</type>
+    <unique>false</unique>
+</CustomField>

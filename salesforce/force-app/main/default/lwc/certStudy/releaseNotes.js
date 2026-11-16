@@ -4,7 +4,6 @@
 // "Coming soon" list shown above the release log. No versions or dates on purpose.
 // Learner-facing only; remove an item when it ships (and add it to RELEASES).
 export const UPCOMING = [
-    'Exam-matched question formats: each certification will use the answer formats of its real exam, such as pick one of three, pick one of four, or pick two.',
     'More licensing and formula questions: edition and plan comparison scenarios (which plan solves which problem) and formula and filter logic, for the certifications where they show up on the exam.',
     'Study reminders: get an email (Slack later) on a schedule you choose, with more reminders as your exam date gets closer and a sample question from your weakest sections.',
     'Practice in Slack: run a practice session for one certification right inside Slack.',
@@ -15,6 +14,22 @@ export const UPCOMING = [
 ];
 
 export const RELEASES = [
+    {
+        version: 'v0.14.2',
+        date: 'Nov 16, 2026',
+        items: [
+            'Exam-matched question formats: new questions now use the answer formats of each real exam, such as pick one of three, pick one of four, or pick two or three. Your existing question pool turns over gradually.',
+            'Mock tests are closer to the real thing: they now include 5 extra questions that do not count toward your score (for example 65 questions, 60 scored). You are not told which ones, and every miss still shows in your review.'
+        ]
+    },
+    {
+        version: 'v0.14.1',
+        date: 'Nov 16, 2026',
+        items: [
+            'Exam results: the paste box is much taller, so you can see everything you pasted, and it shows how many lines it found.',
+            'My exams: the exam pickers now have a search box. Type part of a name or code to find a certification.'
+        ]
+    },
     {
         version: 'v0.14.0',
         date: 'Nov 13, 2026',

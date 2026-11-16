@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>Is_Unscored__c</fullName>
+    <defaultValue>false</defaultValue>
+    <description>Test mode: this answer was one of the randomly chosen unscored questions. It is shown for review but does not count toward the score.</description>
+    <label>Unscored</label>
+    <type>Checkbox</type>
+</CustomField>

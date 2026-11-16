@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>Format_Mix__c</fullName>
+    <description>Answer formats this exam really uses, separated by |. 1of3 = pick one of three, 1of4, 2of4 = pick two of four, 2of5, 3of5. The first entry is the most common. Blank or NONE = the generic default mix.</description>
+    <label>Format Mix</label>
+    <length>80</length>
+    <required>false</required>
+    <type>Text</type>
+    <unique>false</unique>
+</CustomField>

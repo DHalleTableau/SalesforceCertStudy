@@ -544,9 +544,15 @@
                         <div class="slds-text-color_error slds-m-bottom_small">{scoresError}</div>
                     </template>
                     <template lwc:if={noScoresPreview}>
-                        <lightning-textarea label="Section scores" value={scoresText} onchange={handleScoresText}
-                            placeholder="Prompt Engineering: 83%&#10;Data 360 Fundamentals: 58%"
-                            class="slds-m-bottom_small"></lightning-textarea>
+                        <div class="slds-form-element slds-m-bottom_small">
+                            <label class="slds-form-element__label" for="scores-box">Section scores</label>
+                            <div class="slds-form-element__control">
+                                <textarea id="scores-box" class="slds-textarea scores-box" rows="14"
+                                    placeholder={scoresPlaceholder} value={scoresText}
+                                    onchange={handleScoresText} onkeyup={handleScoresText}></textarea>
+                            </div>
+                            <div class="slds-form-element__help slds-text-color_weak">{scoresLineCount}</div>
+                        </div>
                         <lightning-button variant="brand" label="Preview" onclick={previewScoresClick}
                             disabled={cannotPreviewScores}></lightning-button>
                         <lightning-button label="Skip" onclick={closeScores} class="slds-m-left_small"></lightning-button>
@@ -608,9 +614,8 @@
                 </template>
                 <div class="slds-grid slds-wrap slds-gutters_x-small slds-grid_vertical-align-end slds-m-bottom_small">
                     <div class="slds-col slds-size_1-of-1 slds-medium-size_6-of-12">
-                        <lightning-combobox name="goalCert" label="Add an exam" value={goalCertCode}
-                            options={goalCertOptions} placeholder="Choose a certification"
-                            onchange={handleGoalCert}></lightning-combobox>
+                        <c-cert-search-picker label="Add an exam" options={goalCertOptions} value={goalCertCode}
+                            placeholder="Type to search certifications" onselect={handleGoalCert}></c-cert-search-picker>
                     </div>
                     <div class="slds-col slds-size_1-of-1 slds-medium-size_3-of-12">
                         <lightning-input type="date" label="Exam date (optional)" value={goalDate}
@@ -627,9 +632,8 @@
                     <p class="slds-text-heading_small slds-m-top_small slds-m-bottom_x-small">Add a past attempt</p>
                     <div class="slds-grid slds-wrap slds-gutters_x-small slds-grid_vertical-align-end slds-m-bottom_small">
                         <div class="slds-col slds-size_1-of-1 slds-medium-size_5-of-12">
-                            <lightning-combobox name="pastCert" label="Exam" value={pastCertCode}
-                                options={pastCertOptions} placeholder="Choose a certification"
-                                onchange={handlePastCert}></lightning-combobox>
+                            <c-cert-search-picker label="Exam" options={pastCertOptions} value={pastCertCode}
+                                placeholder="Type to search certifications" onselect={handlePastCert}></c-cert-search-picker>
                         </div>
                         <div class="slds-col slds-size_1-of-1 slds-medium-size_3-of-12">
                             <lightning-input type="date" label="Date taken" value={pastDate}

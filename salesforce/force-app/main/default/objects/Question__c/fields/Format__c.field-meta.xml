@@ -23,6 +23,21 @@
                 <default>false</default>
                 <label>multi</label>
             </value>
+            <value>
+                <fullName>3of5</fullName>
+                <default>false</default>
+                <label>3of5</label>
+            </value>
+            <value>
+                <fullName>2of5</fullName>
+                <default>false</default>
+                <label>2of5</label>
+            </value>
+            <value>
+                <fullName>2of4</fullName>
+                <default>false</default>
+                <label>2of4</label>
+            </value>
         </valueSetDefinition>
     </valueSet>
 </CustomField>

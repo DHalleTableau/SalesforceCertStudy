@@ -809,6 +809,103 @@ private class CertStudyTest {
         Assert.areEqual(before.get('Agents'), restored.get('Agents'), 'history weights are back');
     }
 
+    // ------------------------------------------------- per-cert formats and unscored test questions
+
+    @IsTest
+    static void formatMixFollowsTheCert() {
+        Cert__c classic = new Cert__c(Format_Mix__c = '1of4|2of4|2of5');
+        Map<String, Integer> counts = new Map<String, Integer>();
+        for (Integer i = 0; i < 10; i++) {
+            String f = CertStudyGenerator.nextFormat(classic, i);
+            counts.put(f, (counts.containsKey(f) ? counts.get(f) : 0) + 1);
+        }
+        Assert.areEqual(6, counts.get('single'));
+        Assert.areEqual(2, counts.get('2of4'));
+        Assert.areEqual(2, counts.get('2of5'));
+
+        for (Integer i = 0; i < 10; i++) {
+            Assert.areEqual('single3', CertStudyGenerator.nextFormat(new Cert__c(Format_Mix__c = '1of3'), i));
+        }
+        for (String generic : new List<String>{ null, '', 'NONE', 'bogus' }) {
+            Assert.areEqual(CertStudyGenerator.nextFormat(9), CertStudyGenerator.nextFormat(new Cert__c(Format_Mix__c = generic), 9),
+                'blank, NONE and unknown mixes use the generic rotation');
+        }
+        Assert.areEqual(3, CertStudyGenerator.optionCount('single3'));
+        Assert.areEqual(4, CertStudyGenerator.optionCount('2of4'));
+        Assert.areEqual(5, CertStudyGenerator.optionCount('3of5'));
+        Assert.areEqual(3, CertStudyGenerator.minCorrect('3of5'));
+        Assert.areEqual(2, CertStudyGenerator.maxCorrect('2of5'));
+        Assert.areEqual(3, CertStudyGenerator.maxCorrect('multi'));
+    }
+
+    @IsTest
+    static void newFormatsGetExactPromptsAndValidation() {
+        String prompt = CertStudyGenerator.buildQuestionPrompt('Cert', 'Agents', 2, '2of5', 'terminology', 'grounding', new List<String>());
+        Assert.isTrue(prompt.contains('EXACTLY 5 options, EXACTLY 2 correct'), prompt);
+        prompt = CertStudyGenerator.buildQuestionPrompt('Cert', 'Agents', 2, '2of4', 'terminology', 'grounding', new List<String>());
+        Assert.isTrue(prompt.contains('EXACTLY 4 options, EXACTLY 2 correct'));
+
+        CertStudyGenerator.GeneratedQuestion q = new CertStudyGenerator.GeneratedQuestion();
+        q.format = '2of5';
+        q.stem = 'Which two features ground agent responses in trusted data?';
+        q.feedbackMd = 'Explanation. '.repeat(40);
+        q.rawOptionCount = 5;
+        q.optionKeys = new List<String>{ 'A', 'B', 'C', 'D', 'E' };
+        q.correct = new List<String>{ 'A', 'B' };
+        Assert.isNull(CertStudyGenerator.structuralReason(q));
+        q.correct = new List<String>{ 'A', 'B', 'C' };
+        Assert.isNotNull(CertStudyGenerator.structuralReason(q), 'a pick-two question must have exactly two correct answers');
+        q.format = '3of5';
+        Assert.isNull(CertStudyGenerator.structuralReason(q));
+    }
+
+    @IsTest
+    static void testsDeliverExtraQuestionsAndLeaveFiveUnscored() {
+        Cert__c scoredOnly = new Cert__c(Num_Questions__c = 60);
+        Assert.areEqual(65, CertStudyService.deliveredQuestions(scoredOnly), 'scored count plus 5');
+        Assert.areEqual(65, CertStudyService.deliveredQuestions(new Cert__c(Num_Questions__c = 60, Delivered_Questions__c = 65)));
+        Assert.areEqual(65, CertStudyService.deliveredQuestions(new Cert__c(Delivered_Questions__c = 65)));
+        String picked = CertStudyService.pickUnscored(65);
+        Set<String> parts = new Set<String>(picked.split(';'));
+        parts.remove('');
+        Assert.areEqual(5, parts.size(), 'five distinct positions: ' + picked);
+        for (String p : parts) Assert.isTrue(Integer.valueOf(p) >= 1 && Integer.valueOf(p) <= 65);
+    }
+
+    @IsTest
+    static void unscoredQuestionsAreReviewedButNotScored() {
+        CertStudyLlm.instance = new FakeLlm();
+        CertStudyService.unscoredExtra = 2; // a small exam keeps this test inside the query limits
+        update new Cert__c(Id = certId('AI-201'), Num_Questions__c = 3, Duration_Min__c = 30, Passing_Score__c = 70);
+        addReady('AI-201', 8, 'single');
+        CertStudyService.StartOutcome o = CertStudyService.startTestCore('unscored@example.com', 'AI-201', false);
+        Assert.isNull(o.error);
+        Study_Session__c s = CertStudyService.activeSession('unscored@example.com');
+        Assert.areEqual(5, s.Question_Target__c.intValue(), '3 scored + 2 unscored');
+        Assert.areEqual(2, CertStudyService.unscoredCount(s));
+
+        Set<Integer> unscored = new Set<Integer>();
+        for (String p : s.Unscored_Positions__c.split(';')) if (String.isNotBlank(p)) unscored.add(Integer.valueOf(p));
+        Test.startTest();
+        for (Integer position = 1; position <= 5; position++) {
+            Assert.isNotNull(CertStudyService.nextQuestionRecord(s));
+            // right on every scored question, wrong on every unscored one
+            CertStudyService.gradeCore(s, new List<String>{ unscored.contains(position) ? 'B' : 'A' }, false);
+        }
+        Assert.areEqual(2, [SELECT COUNT() FROM Answer__c WHERE Study_Session__c = :s.Id AND Is_Unscored__c = true]);
+
+        CertStudyService.TestResult r = CertStudyService.finishTest(s, false);
+        Test.stopTest();
+        Assert.areEqual(5, r.target);
+        Assert.areEqual(3, r.scoredTarget);
+        Assert.areEqual(2, r.unscoredCount);
+        Assert.areEqual(3, r.correct);
+        Assert.areEqual(100, r.officialPct, 'wrong answers on unscored questions do not hurt the score');
+        Assert.isTrue(r.passed);
+        Assert.areEqual(2, r.missed.size(), 'unscored misses are still reviewed');
+        Assert.isFalse(r.incomplete);
+    }
+
     // ------------------------------------------------- reuse of other learners' answered questions
 
     private static void pauseGeneration() {

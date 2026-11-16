@@ -1,0 +1,27 @@
+<template>
+    <div class="slds-form-element">
+        <lightning-input type="search" label={label} placeholder={placeholder} value={query}
+            onchange={handleInput} onfocus={handleFocus} onblur={handleBlur}
+            autocomplete="off"></lightning-input>
+        <template lwc:if={showList}>
+            <div class="picker-list slds-box slds-box_xx-small slds-theme_default">
+                <template lwc:if={hasResults}>
+                    <ul>
+                        <template for:each={results} for:item="o">
+                            <li key={o.value}>
+                                <button type="button" class="slds-button picker-option" data-value={o.value}
+                                    onmousedown={handlePick}>{o.label}</button>
+                            </li>
+                        </template>
+                    </ul>
+                    <template lwc:if={hasMoreNote}>
+                        <p class="slds-text-color_weak slds-text-body_small slds-p-around_x-small">{moreNote}</p>
+                    </template>
+                </template>
+                <template lwc:else>
+                    <p class="slds-text-color_weak slds-p-around_x-small">No matching certification.</p>
+                </template>
+            </div>
+        </template>
+    </div>
+</template>

@@ -39,8 +39,8 @@ const POLL_MS = 4000;
 const MAX_POLLS = 90; // ~6 minutes
 
 // Shown in the banner/footer. Bump APP_VERSION and APP_RELEASED on each release.
-const APP_VERSION = 'v0.14.0';
-const APP_RELEASED = 'Nov 13, 2026'; // set the exact date when v0.14.0 is published
+const APP_VERSION = 'v0.14.2';
+const APP_RELEASED = 'Nov 16, 2026'; // set the exact date when v0.14.0 is published
 const OWNER_NAME = 'Daniel Halle';
 const OWNER_EMAIL = 'daniel.halle@salesforce.com';
 
@@ -493,6 +493,12 @@ export default class CertStudy extends LightningElement {
         this.scoresError = undefined;
         this.scoresDone = undefined;
         this.view = 'scores';
+    }
+
+    get scoresPlaceholder() { return 'Prompt Engineering: 83%\nData 360 Fundamentals: 58%\nAI Agents: 67%'; }
+    get scoresLineCount() {
+        const n = (this.scoresText || '').split('\n').filter((l) => l.trim()).length;
+        return n === 0 ? 'Paste one section per line.' : `${n} line${n === 1 ? '' : 's'} pasted. Lines without a percentage are ignored.`;
     }
 
     handleScoresText(event) { this.scoresText = event.target.value; }
@@ -1086,7 +1092,10 @@ export default class CertStudy extends LightningElement {
     get resultDetail() {
         const r = this.testResult;
         if (!r) return '';
-        return `${r.correct} of ${r.target} correct for ${r.certName}.`;
+        const base = `${r.correct} of ${r.scoredTarget || r.target} correct for ${r.certName}.`;
+        return r.unscoredCount
+            ? `${base} Like the real exam, ${r.unscoredCount} of the ${r.target} questions were unscored. They are included in your review below but not in your score.`
+            : base;
     }
 
     get incompleteNote() {

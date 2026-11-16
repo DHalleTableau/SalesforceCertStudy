@@ -1,0 +1,16 @@
+.picker-list {
+    max-height: 18rem;
+    overflow-y: auto;
+    position: relative;
+    z-index: 5;
+}
+.picker-option {
+    display: block;
+    width: 100%;
+    text-align: left;
+    padding: 0.4rem 0.5rem;
+    white-space: normal;
+}
+.picker-option:hover {
+    background: #f3f3f3;
+}

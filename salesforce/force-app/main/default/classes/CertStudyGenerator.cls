@@ -62,10 +62,63 @@ public without sharing class CertStudyGenerator {
         return 'single3';
     }
 
+    /** Formats a cert's exam really uses (see Cert__c.Format_Mix__c); empty = use the generic mix. */
+    public static List<String> formatMix(Cert__c cert) {
+        String raw;
+        try {
+            raw = cert == null ? null : cert.Format_Mix__c;
+        } catch (Exception e) {
+            raw = null; // field not queried by the caller
+        }
+        List<String> out = new List<String>();
+        if (String.isBlank(raw) || raw.trim().toUpperCase() == 'NONE') return out;
+        for (String t : raw.split('\\|')) {
+            String f = formatForToken(t.trim());
+            if (f != null && !out.contains(f)) out.add(f);
+        }
+        return out;
+    }
+
+    /** Mix token (1of3, 1of4, 2of4, 2of5, 3of5) to the stored Format__c value; null if unknown. */
+    public static String formatForToken(String token) {
+        String x = token == null ? '' : token.trim().toLowerCase();
+        if (x == '1of3') return 'single3';
+        if (x == '1of4') return 'single';
+        if (x == '2of4' || x == '2of5' || x == '3of5') return x;
+        return null;
+    }
+
+    /**
+     * Format for the Nth generated question of a cert. A single-format exam always uses it. Otherwise
+     * the first (most common) format takes 5-6 of every 10 slots and the others share the rest.
+     */
+    public static String nextFormat(Cert__c cert, Integer total) {
+        List<String> mix = formatMix(cert);
+        if (mix.isEmpty()) return nextFormat(total);
+        if (mix.size() == 1) return mix[0];
+        Integer first = mix.size() <= 3 ? 6 : 5;
+        Integer slot = Math.mod(total, 10);
+        if (slot < first) return mix[0];
+        return mix[1 + Math.mod(slot - first, mix.size() - 1)];
+    }
+
     public static Integer optionCount(String format) {
         if (format == 'single3') return 3;
-        if (format == 'multi') return 5;
-        return 4;
+        if (format == 'multi' || format == '2of5' || format == '3of5') return 5;
+        return 4; // single, 2of4
+    }
+
+    /** Fewest and most correct answers a question of this format may have. */
+    public static Integer minCorrect(String format) {
+        if (format == 'multi' || format == '2of4' || format == '2of5') return 2;
+        if (format == '3of5') return 3;
+        return 1;
+    }
+
+    public static Integer maxCorrect(String format) {
+        if (format == 'multi' || format == '3of5') return 3;
+        if (format == '2of4' || format == '2of5') return 2;
+        return 1;
     }
 
     /** 8-slot cycle: 5 terminology + one each of three scenario flavors. */
@@ -205,6 +258,11 @@ public without sharing class CertStudyGenerator {
             formatInstruction = 'This must be a SINGLE-select question: EXACTLY 3 options, EXACTLY 1 correct answer. Not 2, not 4 -- exactly 3 options.';
         } else if (format == 'single') {
             formatInstruction = 'This must be a SINGLE-select question: EXACTLY 4 options, EXACTLY 1 correct answer. Not 3, not 5 -- exactly 4 options.';
+        } else if (format == '2of4' || format == '2of5' || format == '3of5') {
+            Integer k = minCorrect(format);
+            formatInstruction = 'This must be a MULTI-select question: EXACTLY ' + numOptions + ' options, EXACTLY ' + k
+                + ' correct answers (graded all-or-nothing); the stem must tell the learner to choose ' + k
+                + '. Not ' + (numOptions - 1) + ', not ' + (numOptions + 1) + ' -- exactly ' + numOptions + ' options.';
         } else {
             formatInstruction = 'This must be a MULTI-select question: EXACTLY 5 options, EXACTLY 2 or 3 correct answers (graded all-or-nothing). Not 4, not 6 -- exactly 5 options.';
         }
@@ -366,8 +424,8 @@ public without sharing class CertStudyGenerator {
         if (q.rawOptionCount != expected || q.optionKeys.size() != expected) {
             return 'expected ' + expected + ' options, got ' + q.rawOptionCount;
         }
-        Integer minC = q.format == 'multi' ? 2 : 1;
-        Integer maxC = q.format == 'multi' ? 3 : 1;
+        Integer minC = minCorrect(q.format);
+        Integer maxC = maxCorrect(q.format);
         if (q.correct.size() < minC || q.correct.size() > maxC) {
             return 'expected ' + minC + '-' + maxC + ' correct, got ' + q.correct.size();
         }

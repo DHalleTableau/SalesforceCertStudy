@@ -27,6 +27,9 @@ public without sharing class CertStudyService {
     /** Ready questions kept per cert; larger while someone is taking a test on it. */
     public static final Integer TEST_POOL_TARGET = 10;
     public static final Integer DEFAULT_TEST_QUESTIONS = 60;
+    /** Like the real exam, a test delivers this many extra questions that do not count toward the score. */
+    public static final Integer UNSCORED_PER_TEST = 5;
+    @TestVisible private static Integer unscoredExtra = UNSCORED_PER_TEST; // tests with tiny exams set 0
     public static final Integer DEFAULT_TEST_MINUTES = 105;
     public static final Integer DEFAULT_PASSING_SCORE = 65;
     public static final Integer MAX_RECOMMENDATIONS = 5;
@@ -932,7 +935,7 @@ public without sharing class CertStudyService {
         Map<String, Cert__c> certsByCode = new Map<String, Cert__c>();
         for (Cert__c c : [
             SELECT Id, Name, Cert_Code__c, Is_Aggregate__c, Duration_Min__c, Num_Questions__c,
-                Passing_Score__c, Domains_JSON__c, Grounding_Chars__c
+                Passing_Score__c, Domains_JSON__c, Grounding_Chars__c, Delivered_Questions__c
             FROM Cert__c
         ]) {
             certsByCode.put(c.Cert_Code__c.toUpperCase(), c);
@@ -1089,11 +1092,18 @@ public without sharing class CertStudyService {
 
         out.correct = correctKeys(q);
         out.isCorrect = new Set<String>(out.chosen).equals(new Set<String>(out.correct));
+        Boolean unscored = false;
+        String unscoredPos = isTest(s) ? unscoredPositions(s) : null;
+        if (String.isNotBlank(unscoredPos)) {
+            Integer position = [SELECT COUNT() FROM Answer__c WHERE Study_Session__c = :s.Id] + 1;
+            unscored = unscoredPos.contains(';' + position + ';');
+        }
         insert new Answer__c(
             Study_Session__c = s.Id,
             Question__c = q.Id,
             User_Answer__c = chosenKey,
             Is_Correct__c = out.isCorrect,
+            Is_Unscored__c = unscored,
             Answered_At__c = DateTime.now()
         );
         q.Status__c = 'Answered';
@@ -1110,7 +1120,7 @@ public without sharing class CertStudyService {
     /** Most recent session for the user (active first by recency); null if none. */
     public static Study_Session__c latestSession(String key) {
         List<Study_Session__c> sessions = [
-            SELECT Id, Cert_Codes__c, Status__c, Started_At__c, Mode__c, Question_Target__c, Timer_Mode__c, Time_Limit_Min__c, Elapsed_Seconds__c, Resumed_At__c, Paused__c, Completed_At__c,
+            SELECT Id, Cert_Codes__c, Status__c, Started_At__c, Mode__c, Question_Target__c, Unscored_Positions__c, Timer_Mode__c, Time_Limit_Min__c, Elapsed_Seconds__c, Resumed_At__c, Paused__c, Completed_At__c,
                 Min_Difficulty__c, Focus_Weak_Areas__c, Domain_Weights_JSON__c
             FROM Study_Session__c
             WHERE User_Key__c = :key
@@ -1212,7 +1222,9 @@ public without sharing class CertStudyService {
 
     public class TestResult {
         public Cert__c cert;
-        public Integer target = 0;
+        public Integer target = 0;         // questions delivered, including unscored ones
+        public Integer scoredTarget = 0;   // questions that count toward the score
+        public Integer unscoredCount = 0;  // delivered but not counted (never revealed which)
         public Integer answered = 0;
         public Integer correct = 0;
         public Integer unanswered = 0;
@@ -1236,6 +1248,52 @@ public without sharing class CertStudyService {
         return s != null && s.Mode__c == MODE_TEST;
     }
 
+    /** Questions shown in a test: the cert's delivered count, else its scored count plus the unscored extras. */
+    public static Integer deliveredQuestions(Cert__c c) {
+        Integer scored = c.Num_Questions__c != null ? c.Num_Questions__c.intValue() : DEFAULT_TEST_QUESTIONS;
+        Integer delivered = null;
+        try {
+            delivered = c.Delivered_Questions__c == null ? null : c.Delivered_Questions__c.intValue();
+        } catch (Exception e) {
+            delivered = null; // field not queried by the caller
+        }
+        return delivered != null && delivered > 0 ? delivered : scored + unscoredExtra;
+    }
+
+    /** Random question numbers (1-based) that will not be scored, as ;n;n;. Never shown to the learner. */
+    public static String pickUnscored(Integer delivered) {
+        Integer n = Math.min(unscoredExtra, Math.max(0, (delivered == null ? 0 : delivered) - 1));
+        if (n == 0) return null;
+        List<Integer> positions = new List<Integer>();
+        for (Integer i = 1; i <= delivered; i++) positions.add(i);
+        for (Integer i = positions.size() - 1; i > 0; i--) {
+            Integer j = Math.floor(Math.random() * (i + 1)).intValue();
+            Integer t = positions[i];
+            positions[i] = positions[j];
+            positions[j] = t;
+        }
+        List<Integer> chosen = new List<Integer>();
+        for (Integer i = 0; i < n; i++) chosen.add(positions[i]);
+        chosen.sort();
+        return ';' + String.join(chosen, ';') + ';';
+    }
+
+    public static Integer unscoredCount(Study_Session__c s) {
+        String p = unscoredPositions(s);
+        if (String.isBlank(p)) return 0;
+        Integer n = 0;
+        for (String t : p.split(';')) if (String.isNotBlank(t)) n++;
+        return n;
+    }
+
+    private static String unscoredPositions(Study_Session__c s) {
+        try {
+            return s == null ? null : s.Unscored_Positions__c;
+        } catch (Exception e) {
+            return null; // field not queried by the caller
+        }
+    }
+
     public static StartOutcome startTestCore(String key, String certCode, Boolean strictTimer) {
         StartOutcome out = new StartOutcome();
         Cert__c c = String.isBlank(certCode) ? null : certsByUpperCode().get(certCode.trim().toUpperCase());
@@ -1252,13 +1310,15 @@ public without sharing class CertStudyService {
             return out;
         }
         endSessions([SELECT Id FROM Study_Session__c WHERE User_Key__c = :key AND Status__c = :ACTIVE]);
+        Integer delivered = deliveredQuestions(c);
         Study_Session__c s = new Study_Session__c(
             User_Key__c = key,
             User__c = userIdFor(key),
             Cert_Codes__c = ';' + c.Id + ';',
             Mode__c = MODE_TEST,
             Status__c = ACTIVE,
-            Question_Target__c = c.Num_Questions__c != null ? c.Num_Questions__c : DEFAULT_TEST_QUESTIONS,
+            Question_Target__c = delivered,
+            Unscored_Positions__c = pickUnscored(delivered),
             Time_Limit_Min__c = c.Duration_Min__c != null ? c.Duration_Min__c : DEFAULT_TEST_MINUTES,
             Timer_Mode__c = strictTimer == true ? 'Strict' : 'Open',
             Elapsed_Seconds__c = 0,
@@ -1395,6 +1455,8 @@ public without sharing class CertStudyService {
         ];
         r.cert = certs.isEmpty() ? null : certs[0];
         r.target = s.Question_Target__c == null ? 0 : s.Question_Target__c.intValue();
+        r.unscoredCount = r.target > 0 ? Math.min(unscoredCount(s), r.target) : 0;
+        r.scoredTarget = r.target - r.unscoredCount;
         r.limitMin = s.Time_Limit_Min__c == null ? null : s.Time_Limit_Min__c.intValue();
         r.strictTimer = s.Timer_Mode__c == 'Strict';
         r.elapsedSeconds = elapsedSeconds(s);
@@ -1403,7 +1465,7 @@ public without sharing class CertStudyService {
 
         Map<String, DomainResult> byName = new Map<String, DomainResult>();
         if (r.cert != null) {
-            Map<String, Integer> quotas = domainQuotas(r.cert, r.target);
+            Map<String, Integer> quotas = domainQuotas(r.cert, r.scoredTarget);
             for (Map<String, Object> d : CertStudyGenerator.domains(r.cert)) {
                 DomainResult dr = new DomainResult();
                 dr.name = String.valueOf(d.get('name'));
@@ -1417,13 +1479,20 @@ public without sharing class CertStudyService {
                 r.domains.add(dr);
             }
         }
+        Integer scoredAnswered = 0;
         for (Answer__c a : [
-            SELECT Is_Correct__c, User_Answer__c, Question__r.Stem__c, Question__r.Domain__c,
+            SELECT Is_Correct__c, Is_Unscored__c, User_Answer__c, Question__r.Stem__c, Question__r.Domain__c,
                 Question__r.Correct_JSON__c, Question__r.Options_JSON__c, Question__r.Feedback_MD__c,
                 Question__r.Cert__r.Name
             FROM Answer__c WHERE Study_Session__c = :s.Id ORDER BY Answered_At__c
         ]) {
             r.answered++;
+            if (a.Is_Unscored__c == true) {
+                // Shown for review like any other miss, but never counted in the score or the sections.
+                if (!a.Is_Correct__c) r.missed.add(a);
+                continue;
+            }
+            scoredAnswered++;
             if (a.Is_Correct__c) r.correct++;
             else r.missed.add(a);
             String dn = String.isBlank(a.Question__r.Domain__c) ? 'Other' : a.Question__r.Domain__c;
@@ -1439,10 +1508,10 @@ public without sharing class CertStudyService {
         }
         r.unanswered = Math.max(0, r.target - r.answered);
         r.incomplete = r.unanswered > 0;
-        r.officialPct = pct(r.correct, r.target > 0 ? r.target : r.answered);
+        r.officialPct = pct(r.correct, r.scoredTarget > 0 ? r.scoredTarget : scoredAnswered);
         r.passed = r.officialPct >= r.passing;
-        r.answeredPct = pct(r.correct, r.answered);
-        r.answeredLikelyPass = r.answered > 0 && r.answeredPct >= r.passing;
+        r.answeredPct = pct(r.correct, scoredAnswered);
+        r.answeredLikelyPass = scoredAnswered > 0 && r.answeredPct >= r.passing;
 
         // Recommendations: weakest high-weight sections first, then sections never reached.
         Map<String, String> ranked = new Map<String, String>();
@@ -1719,7 +1788,7 @@ public without sharing class CertStudyService {
 
     public static Study_Session__c activeSession(String key) {
         List<Study_Session__c> rows = [
-            SELECT Id, Cert_Codes__c, Status__c, Started_At__c, Mode__c, Question_Target__c, Timer_Mode__c, Time_Limit_Min__c, Elapsed_Seconds__c, Resumed_At__c, Paused__c, Completed_At__c,
+            SELECT Id, Cert_Codes__c, Status__c, Started_At__c, Mode__c, Question_Target__c, Unscored_Positions__c, Timer_Mode__c, Time_Limit_Min__c, Elapsed_Seconds__c, Resumed_At__c, Paused__c, Completed_At__c,
                 Min_Difficulty__c, Focus_Weak_Areas__c, Domain_Weights_JSON__c FROM Study_Session__c
             WHERE User_Key__c = :key AND Status__c = :ACTIVE
             ORDER BY Started_At__c DESC LIMIT 1

@@ -67,6 +67,8 @@ public with sharing class CertStudyController {
         @AuraEnabled public Boolean passingEstimated;
         @AuraEnabled public Integer correct;
         @AuraEnabled public Integer target;
+        @AuraEnabled public Integer scoredTarget;
+        @AuraEnabled public Integer unscoredCount;
         @AuraEnabled public Integer answered;
         @AuraEnabled public Integer unanswered;
         @AuraEnabled public Integer answeredPct;
@@ -726,7 +728,7 @@ public with sharing class CertStudyController {
             HistoryView h = new HistoryView();
             Integer maxSessions = HISTORY_SESSIONS;
             List<Study_Session__c> sessions = [
-                SELECT Id, Mode__c, Status__c, Started_At__c, Cert_Codes__c, Question_Target__c, Completed_At__c
+                SELECT Id, Mode__c, Status__c, Started_At__c, Cert_Codes__c, Question_Target__c, Unscored_Positions__c, Completed_At__c
                 FROM Study_Session__c WHERE User_Key__c = :key
                 ORDER BY Started_At__c DESC LIMIT :maxSessions
             ];
@@ -740,6 +742,13 @@ public with sharing class CertStudyController {
                 SELECT Study_Session__c sid, COUNT(Id) n FROM Answer__c
                 WHERE Study_Session__c IN :sessions AND Is_Correct__c = true GROUP BY Study_Session__c
             ]) rights.put((Id) ar.get('sid'), (Integer) ar.get('n'));
+            // Tests: unscored questions never count toward the score.
+            Map<Id, Integer> scoredRights = new Map<Id, Integer>();
+            for (AggregateResult ar : [
+                SELECT Study_Session__c sid, COUNT(Id) n FROM Answer__c
+                WHERE Study_Session__c IN :sessions AND Is_Correct__c = true AND Is_Unscored__c = false
+                GROUP BY Study_Session__c
+            ]) scoredRights.put((Id) ar.get('sid'), (Integer) ar.get('n'));
 
             Set<Id> certIds = new Set<Id>();
             for (Study_Session__c s : sessions) certIds.addAll(idsIn(s.Cert_Codes__c));
@@ -771,8 +780,11 @@ public with sharing class CertStudyController {
                 names.sort();
                 hs.certNames = String.join(names, ', ');
                 if (isTest) {
-                    hs.target = s.Question_Target__c == null ? answered : s.Question_Target__c.intValue();
-                    hs.officialPct = CertStudyService.pct(hs.correct, hs.target > 0 ? hs.target : hs.answered);
+                    Integer delivered = s.Question_Target__c == null ? answered : s.Question_Target__c.intValue();
+                    Integer scoredTarget = delivered - Math.min(CertStudyService.unscoredCount(s), delivered);
+                    hs.target = active ? delivered : scoredTarget;
+                    hs.correct = scoredRights.containsKey(s.Id) ? scoredRights.get(s.Id) : 0;
+                    hs.officialPct = CertStudyService.pct(hs.correct, scoredTarget > 0 ? scoredTarget : hs.answered);
                     Integer passMark = passing == null ? CertStudyService.DEFAULT_PASSING_SCORE : passing.intValue();
                     hs.passed = hs.officialPct >= passMark;
                     hs.completed = !active;
@@ -848,7 +860,7 @@ public with sharing class CertStudyController {
             String key = CertStudyService.resolveUserKey(null);
             DetailView d = new DetailView();
             List<Study_Session__c> rows = [
-                SELECT Id, Cert_Codes__c, Status__c, Started_At__c, Mode__c, Question_Target__c, Timer_Mode__c,
+                SELECT Id, Cert_Codes__c, Status__c, Started_At__c, Mode__c, Question_Target__c, Unscored_Positions__c, Timer_Mode__c,
                     Time_Limit_Min__c, Elapsed_Seconds__c, Resumed_At__c, Paused__c, Completed_At__c
                 FROM Study_Session__c WHERE Id = :sessionId AND User_Key__c = :key
             ];
@@ -1051,6 +1063,8 @@ public with sharing class CertStudyController {
         t.passingEstimated = r.passingEstimated;
         t.correct = r.correct;
         t.target = r.target;
+        t.scoredTarget = r.scoredTarget;
+        t.unscoredCount = r.unscoredCount;
         t.answered = r.answered;
         t.unanswered = r.unanswered;
         t.answeredPct = r.answeredPct;

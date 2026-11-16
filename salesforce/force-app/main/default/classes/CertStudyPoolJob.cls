@@ -157,7 +157,7 @@ public without sharing class CertStudyPoolJob implements Queueable, Database.All
     public void execute(QueueableContext ctx) {
         Cert__c cert = [
             SELECT Id, Name, Cert_Code__c, Domains_JSON__c, Overview_Derived_At__c,
-                Duration_Min__c, Num_Questions__c, Passing_Score__c, Last_Generation_Error__c
+                Duration_Min__c, Num_Questions__c, Passing_Score__c, Last_Generation_Error__c, Format_Mix__c
             FROM Cert__c
             WHERE Id = :certId
         ];
@@ -272,7 +272,7 @@ public without sharing class CertStudyPoolJob implements Queueable, Database.All
 
         Integer total = [SELECT COUNT() FROM Question__c WHERE Cert__c = :cert.Id];
         Integer difficulty = CertStudyGenerator.nextDifficulty(total, minDifficulty == null ? 1 : minDifficulty);
-        String format = CertStudyGenerator.nextFormat(total);
+        String format = CertStudyGenerator.nextFormat(cert, total);
         String style = CertStudyGenerator.nextStyle(total);
         String domain = focusDomain != null ? focusDomain : CertStudyGenerator.nextDomain(cert, total);
 

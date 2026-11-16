@@ -299,6 +299,7 @@ private class CertStudyControllerTest {
     }
 
     private static void shortExam(Integer questions, Integer minutes) {
+        CertStudyService.unscoredExtra = 0; // these small exams score every question
         Cert__c c = [SELECT Id FROM Cert__c WHERE Cert_Code__c = 'AI-201'];
         c.Num_Questions__c = questions;
         c.Duration_Min__c = minutes;
