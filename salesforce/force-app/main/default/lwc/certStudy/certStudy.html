@@ -626,6 +626,42 @@
                             disabled={cannotAddGoal}></lightning-button>
                     </div>
                 </div>
+                <div class="slds-box slds-box_x-small slds-m-bottom_small">
+                    <p class="slds-text-heading_small slds-m-bottom_x-small">Study reminders</p>
+                    <p class="slds-text-color_weak slds-m-bottom_x-small">
+                        One email for all your upcoming exams, with a sample question from your weakest sections.
+                    </p>
+                    <template lwc:if={reminderMessage}>
+                        <p class="slds-m-bottom_x-small">{reminderMessage}</p>
+                    </template>
+                    <lightning-input type="checkbox" label="Email me study reminders" checked={reminder.emailEnabled}
+                        data-field="emailEnabled" onchange={handleReminderField}></lightning-input>
+                    <lightning-input type="checkbox" label="Slack reminders (coming soon)" disabled
+                        class="slds-m-bottom_x-small"></lightning-input>
+                    <template lwc:if={reminder.emailEnabled}>
+                        <div class="slds-grid slds-wrap slds-gutters_x-small">
+                            <div class="slds-col slds-size_1-of-1 slds-medium-size_6-of-12">
+                                <lightning-combobox label="How often" value={reminder.cadence} options={cadenceOptions}
+                                    data-field="cadence" onchange={handleReminderField}></lightning-combobox>
+                            </div>
+                            <template lwc:if={reminderIsWeekly}>
+                                <div class="slds-col slds-size_1-of-1 slds-medium-size_6-of-12">
+                                    <lightning-combobox label="Day of the week" value={reminder.weeklyDay}
+                                        options={dayOptions} data-field="weeklyDay"
+                                        onchange={handleReminderField}></lightning-combobox>
+                                </div>
+                            </template>
+                        </div>
+                        <lightning-input type="checkbox" label="Send daily in the final 7 days before an exam"
+                            checked={reminder.ramp} data-field="ramp" onchange={handleReminderField}></lightning-input>
+                    </template>
+                    <div class="slds-m-top_x-small">
+                        <lightning-button variant="brand" label="Save reminders" onclick={saveReminder}
+                            disabled={busy}></lightning-button>
+                        <lightning-button label="Send me a test reminder" onclick={sendTest} disabled={busy}
+                            class="slds-m-left_small"></lightning-button>
+                    </div>
+                </div>
                 <lightning-input type="checkbox" label="Show completed exams" checked={showCompleted}
                     onchange={handleShowCompleted} class="slds-m-bottom_x-small"></lightning-input>
                 <template lwc:if={showCompleted}>

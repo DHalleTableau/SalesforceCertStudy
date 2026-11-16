@@ -384,6 +384,51 @@ public with sharing class CertStudyController {
         }
     }
 
+    public class ReminderView {
+        @AuraEnabled public Boolean emailEnabled;
+        @AuraEnabled public Boolean slackEnabled;
+        @AuraEnabled public String cadence;
+        @AuraEnabled public String weeklyDay;
+        @AuraEnabled public Boolean ramp;
+    }
+
+    private static ReminderView toReminderView(CertStudyReminders.Setting s) {
+        ReminderView v = new ReminderView();
+        v.emailEnabled = s.emailEnabled;
+        v.slackEnabled = s.slackEnabled;
+        v.cadence = s.cadence;
+        v.weeklyDay = s.weeklyDay;
+        v.ramp = s.ramp;
+        return v;
+    }
+
+    @AuraEnabled
+    public static ReminderView getReminderSettings() {
+        try {
+            return toReminderView(CertStudyReminders.getSetting(UserInfo.getUserId()));
+        } catch (Exception e) {
+            throw wrap(e);
+        }
+    }
+
+    @AuraEnabled
+    public static ReminderView saveReminderSettings(Boolean emailEnabled, String cadence, String weeklyDay, Boolean ramp) {
+        try {
+            return toReminderView(CertStudyReminders.saveSetting(UserInfo.getUserId(), emailEnabled, cadence, weeklyDay, ramp));
+        } catch (Exception e) {
+            throw wrap(e);
+        }
+    }
+
+    @AuraEnabled
+    public static void sendTestReminder() {
+        try {
+            CertStudyReminders.sendTest(UserInfo.getUserId());
+        } catch (Exception e) {
+            throw wrap(e);
+        }
+    }
+
     /** Saved section scores for a "Not passed" exam, to review or edit. Rows are empty when none were entered. */
     @AuraEnabled
     public static ScorePreviewView getSavedSectionScores(String goalId) {

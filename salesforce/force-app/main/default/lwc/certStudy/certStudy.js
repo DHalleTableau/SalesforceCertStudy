@@ -9,6 +9,9 @@ import getFocusableCerts from '@salesforce/apex/CertStudyController.getFocusable
 import addPastExam from '@salesforce/apex/CertStudyController.addPastExam';
 import deleteExam from '@salesforce/apex/CertStudyController.deleteExam';
 import getExamHistory from '@salesforce/apex/CertStudyController.getExamHistory';
+import getReminderSettings from '@salesforce/apex/CertStudyController.getReminderSettings';
+import saveReminderSettings from '@salesforce/apex/CertStudyController.saveReminderSettings';
+import sendTestReminder from '@salesforce/apex/CertStudyController.sendTestReminder';
 import getSavedSectionScores from '@salesforce/apex/CertStudyController.getSavedSectionScores';
 import getExamFocus from '@salesforce/apex/CertStudyController.getExamFocus';
 import previewSectionScores from '@salesforce/apex/CertStudyController.previewSectionScores';
@@ -39,7 +42,7 @@ const POLL_MS = 4000;
 const MAX_POLLS = 90; // ~6 minutes
 
 // Shown in the banner/footer. Bump APP_VERSION and APP_RELEASED on each release.
-const APP_VERSION = 'v0.14.2';
+const APP_VERSION = 'v0.14.3';
 const APP_RELEASED = 'Nov 16, 2026'; // set the exact date when v0.14.0 is published
 const OWNER_NAME = 'Daniel Halle';
 const OWNER_EMAIL = 'daniel.halle@salesforce.com';
@@ -384,6 +387,7 @@ export default class CertStudy extends LightningElement {
             try { this.allCerts = await listCerts(); } catch (e) { /* options just stay empty */ }
         }
         if (this.showCompleted) await this.loadExamHistory();
+        await this.loadReminder();
         this.view = 'goals';
     }
 
@@ -550,6 +554,63 @@ export default class CertStudy extends LightningElement {
     closeScores() {
         if (this.scoresFrom === 'goals') this.showGoals();
         else this.showSelect();
+    }
+
+    // Study reminders (email now, Slack later). One setting for all exams.
+    reminder = { emailEnabled: false, cadence: 'Weekly', weeklyDay: 'Monday', ramp: true };
+    reminderMessage;
+
+    get cadenceOptions() {
+        return ['Daily', 'Weekdays', 'Twice a week', 'Weekly'].map((v) => ({
+            label: v === 'Twice a week' ? 'Twice a week (Mon and Thu)' : v,
+            value: v
+        }));
+    }
+    get dayOptions() {
+        return ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'].map((v) => ({ label: v, value: v }));
+    }
+    get reminderIsWeekly() { return this.reminder.cadence === 'Weekly'; }
+
+    async loadReminder() {
+        try {
+            this.reminder = await getReminderSettings();
+        } catch (e) { /* defaults stay */ }
+    }
+
+    handleReminderField(event) {
+        const f = event.target.dataset.field;
+        const v = event.target.type === 'checkbox' ? event.target.checked : event.detail.value;
+        this.reminder = { ...this.reminder, [f]: v };
+        this.reminderMessage = undefined;
+    }
+
+    async saveReminder() {
+        this.reminderMessage = undefined;
+        this.busy = true;
+        try {
+            const r = this.reminder;
+            this.reminder = await saveReminderSettings({
+                emailEnabled: r.emailEnabled, cadence: r.cadence, weeklyDay: r.weeklyDay, ramp: r.ramp
+            });
+            this.reminderMessage = r.emailEnabled ? 'Saved. Reminders are on.' : 'Saved. Reminders are off.';
+        } catch (e) {
+            this.reminderMessage = this.messageOf(e);
+        } finally {
+            this.busy = false;
+        }
+    }
+
+    async sendTest() {
+        this.reminderMessage = undefined;
+        this.busy = true;
+        try {
+            await sendTestReminder();
+            this.reminderMessage = 'Sent. Check your inbox in a minute.';
+        } catch (e) {
+            this.reminderMessage = this.messageOf(e);
+        } finally {
+            this.busy = false;
+        }
     }
 
     // Completed exams stay on file; they are only hidden from the list until the toggle is on.

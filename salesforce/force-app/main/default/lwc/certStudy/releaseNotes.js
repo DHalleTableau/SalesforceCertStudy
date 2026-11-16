@@ -5,7 +5,7 @@
 // Learner-facing only; remove an item when it ships (and add it to RELEASES).
 export const UPCOMING = [
     'More licensing and formula questions: edition and plan comparison scenarios (which plan solves which problem) and formula and filter logic, for the certifications where they show up on the exam.',
-    'Study reminders: get an email (Slack later) on a schedule you choose, with more reminders as your exam date gets closer and a sample question from your weakest sections.',
+    'Study reminders in Slack (email reminders are available now).',
     'Practice in Slack: run a practice session for one certification right inside Slack.',
     'Score trends across attempts: if you take an exam more than once, see how each section changed from one attempt to the next.',
     'A personal stats dashboard: your scores over time, by certification and section, and how close you are to passing.',
@@ -14,6 +14,13 @@ export const UPCOMING = [
 ];
 
 export const RELEASES = [
+    {
+        version: 'v0.14.3',
+        date: 'Nov 16, 2026',
+        items: [
+            'Study reminders: in My exams, turn on one email digest for all your upcoming exams. Choose daily, weekdays, twice a week or weekly (and the day), and get a reminder every day in the final 7 days before an exam. Each email includes a sample question from your weakest sections, with the answer in small print, and a link back to the app. Use Send me a test reminder to see one now.'
+        ]
+    },
     {
         version: 'v0.14.2',
         date: 'Nov 16, 2026',
